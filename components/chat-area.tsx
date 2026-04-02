@@ -5,6 +5,7 @@ import { MessageInput } from "./message-input";
 import { MessageList } from "./message-list";
 import { ScrollArea } from "./ui/scroll-area";
 import { cn } from "@/lib/utils";
+import { SilencedNotificationsMessage } from "./silenced-notifications-message";
 
 interface ChatAreaProps {
   isNewChat: boolean;
@@ -67,6 +68,10 @@ export function ChatArea({
   }, []);
 
   const conversationRecipients = activeConversation?.recipients || [];
+  const silencedMessageText =
+    activeConversation?.recipients.length === 1
+      ? `${activeConversation.recipients[0].name} has notification silenced`
+      : "Notifications silenced";
 
   // Create a key that changes when recipients change
   const messageInputKey = conversationRecipients.map((r) => r.id).join(",");
@@ -134,30 +139,37 @@ export function ChatArea({
           )}
         >
           <div className="flex-1 flex flex-col relative">
-            <div className="relative h-full flex">
-              <div className="w-3 bg-background" />
-              <MessageList
-                messages={activeConversation?.messages || []}
-                conversation={activeConversation}
-                typingStatus={
-                  typingStatus?.conversationId === conversationId
-                    ? typingStatus
-                    : null
-                }
-                onReaction={(messageId, reaction) => {
-                  onReaction?.(messageId, reaction);
-                }}
-                conversationId={conversationId}
-                messageInputRef={messageInputRef}
-                isMobileView={isMobileView}
-              />
-              <div className="w-3 bg-background" />
+            <div className="relative h-full flex flex-1 min-h-0 min-w-0">
+              <div className="w-3 bg-background shrink-0" />
+              <div className="flex-1 flex flex-col min-w-0 min-h-0">
+                <MessageList
+                  messages={activeConversation?.messages || []}
+                  conversation={activeConversation}
+                  typingStatus={
+                    typingStatus?.conversationId === conversationId
+                      ? typingStatus
+                      : null
+                  }
+                  onReaction={(messageId, reaction) => {
+                    onReaction?.(messageId, reaction);
+                  }}
+                  conversationId={conversationId}
+                  messageInputRef={messageInputRef}
+                  isMobileView={isMobileView}
+                />
+              </div>
+              <div className="w-3 bg-background shrink-0" />
             </div>
             <div className="bg-background flex-1" />
           </div>
         </div>
       </ScrollArea>
       <div className="absolute bottom-0 left-0 right-0 z-50 mb-[env(keyboard-inset-height,0px)]">
+        {activeConversation?.hideAlerts && !isNewChat ? (
+          <SilencedNotificationsMessage className="pb-2">
+            {silencedMessageText}
+          </SilencedNotificationsMessage>
+        ) : null}
         <MessageInput
           key={messageInputKey}
           ref={messageInputRef}

@@ -1,6 +1,7 @@
 import { Icons } from "./icons";
 import { useEffect } from "react";
 import { cn } from "@/lib/utils";
+import { useTheme } from "next-themes";
 
 interface NavProps {
   onNewChat: () => void;
@@ -9,6 +10,9 @@ interface NavProps {
 }
 
 export function Nav({ onNewChat, isMobileView, isScrolled }: NavProps) {
+  const { theme, systemTheme, setTheme } = useTheme();
+  const effectiveTheme = theme === "system" ? systemTheme : theme;
+
   // Keyboard shortcut for creating a new chat
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -56,15 +60,33 @@ export function Nav({ onNewChat, isMobileView, isScrolled }: NavProps) {
             <span className="opacity-0 group-hover:opacity-100 text-[10px] font-medium leading-none text-background -translate-y-[0.5px]">+</span>
           </button>
         </div>
-        <button
-          className={`sm:p-2 hover:bg-muted-foreground/10 rounded-lg ${
-            isMobileView ? "p-2" : ""
-          }`}
-          onClick={onNewChat}
-          aria-label="New conversation (n)"
-        >
-          <Icons.new />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            className={cn(
+              "p-2 rounded-lg text-muted-foreground/70 hover:text-foreground hover:bg-muted-foreground/10 transition-colors",
+              isMobileView && "p-2"
+            )}
+            onClick={() => setTheme(effectiveTheme === "dark" ? "light" : "dark")}
+            aria-label="Toggle dark mode"
+            title="Toggle dark mode (t)"
+          >
+            {effectiveTheme === "dark" ? (
+              <Icons.sun className="h-4 w-4" />
+            ) : (
+              <Icons.moon className="h-4 w-4" />
+            )}
+          </button>
+          <button
+            className={cn(
+              "sm:p-2 hover:bg-muted-foreground/10 rounded-lg",
+              isMobileView && "p-2"
+            )}
+            onClick={onNewChat}
+            aria-label="New conversation (n)"
+          >
+            <Icons.new />
+          </button>
+        </div>
       </div>
     </>
   );

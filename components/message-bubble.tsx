@@ -11,6 +11,7 @@ import { useTheme } from "next-themes";
 import Image from "next/image";
 import { soundEffects } from "@/lib/sound-effects";
 import { Icons } from "./icons";
+import { SilencedNotificationsMessage } from "./silenced-notifications-message";
 
 // Props for the MessageBubble component
 interface MessageBubbleProps {
@@ -49,6 +50,11 @@ export function MessageBubble({
   const isMe = message.sender === "me";
   const showRecipientName = !isMe && !isSystemMessage;
   const recipientName = showRecipientName ? message.sender : null;
+  const primaryRecipientName = conversation?.recipients[0]?.name;
+  const silencedLabel =
+    primaryRecipientName && message.content === "Notifications silenced"
+      ? `${primaryRecipientName} has notification silenced`
+      : message.content;
 
   // Map of reaction types to their SVG paths for the menu
   const { theme, systemTheme } = useTheme();
@@ -308,23 +314,22 @@ export function MessageBubble({
         {isMe && <div className="flex-1 bg-background" />}
         {/* Message bubble container */}
         {isSystemMessage ? (
-          <div
-            className={cn(
-              "w-full flex justify-center py-2 px-3",
-              isSystemMessage && "bg-background",
-            )}
-          >
+          message.type === "silenced" ? (
+            <SilencedNotificationsMessage>
+              {silencedLabel}
+            </SilencedNotificationsMessage>
+          ) : (
             <div
               className={cn(
-                "text-[12px] text-muted-foreground text-center whitespace-pre-line max-w-[80%]",
-                message.type === "silenced" &&
-                  "text-[#7978DF] flex items-center gap-1",
+                "w-full flex justify-center py-2 px-3",
+                isSystemMessage && "bg-background",
               )}
             >
-              {message.type === "silenced" && <Icons.silencedMoon />}
-              {message.content}
+              <div className="text-[12px] text-muted-foreground text-center whitespace-pre-line max-w-[80%]">
+                {message.content}
+              </div>
             </div>
-          </div>
+          )
         ) : (
           <div
             className={cn(
