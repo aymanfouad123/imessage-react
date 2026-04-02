@@ -8,14 +8,15 @@ class SoundEffectPlayer {
   private isMobile: boolean = false;
 
   private constructor() {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== "undefined") {
       // Check if device is mobile
       this.isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-      
+
       // Get sound preference from localStorage, default to !isMobile if not set
-      const storedEnabled = localStorage.getItem('soundEnabled');
-      this.enabled = storedEnabled !== null ? storedEnabled === 'true' : !this.isMobile;
-      
+      const storedEnabled = localStorage.getItem("soundEnabled");
+      this.enabled =
+        storedEnabled !== null ? storedEnabled === "true" : !this.isMobile;
+
       this.sentSound = new Audio("/sound-effects/sent.m4a");
       this.receivedSound = new Audio("/sound-effects/received.m4a");
       this.unreadSound = new Audio("/sound-effects/unread.m4a");
@@ -31,7 +32,7 @@ class SoundEffectPlayer {
   }
 
   public playSentSound() {
-    if (this.enabled && typeof window !== 'undefined' && this.sentSound) {
+    if (this.enabled && typeof window !== "undefined" && this.sentSound) {
       this.sentSound.currentTime = 0;
       this.sentSound.play().catch(() => {
         // Silently handle autoplay restrictions
@@ -40,7 +41,7 @@ class SoundEffectPlayer {
   }
 
   public playUnreadSound() {
-    if (this.enabled && typeof window !== 'undefined' && this.unreadSound) {
+    if (this.enabled && typeof window !== "undefined" && this.unreadSound) {
       this.unreadSound.currentTime = 0;
       this.unreadSound.play().catch(() => {
         // Silently handle autoplay restrictions
@@ -49,7 +50,7 @@ class SoundEffectPlayer {
   }
 
   public playReceivedSound() {
-    if (this.enabled && typeof window !== 'undefined' && this.receivedSound) {
+    if (this.enabled && typeof window !== "undefined" && this.receivedSound) {
       this.receivedSound.currentTime = 0;
       this.receivedSound.play().catch(() => {
         // Silently handle autoplay restrictions
@@ -58,7 +59,7 @@ class SoundEffectPlayer {
   }
 
   public playReactionSound() {
-    if (this.enabled && typeof window !== 'undefined' && this.reactionSound) {
+    if (this.enabled && typeof window !== "undefined" && this.reactionSound) {
       this.reactionSound.currentTime = 0;
       this.reactionSound.play().catch(() => {
         // Silently handle autoplay restrictions
@@ -68,8 +69,8 @@ class SoundEffectPlayer {
 
   public toggleSound() {
     this.enabled = !this.enabled;
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('soundEnabled', this.enabled.toString());
+    if (typeof window !== "undefined") {
+      localStorage.setItem("soundEnabled", this.enabled.toString());
     }
   }
 
