@@ -210,6 +210,49 @@ export default function App() {
     return temp.textContent || "";
   };
 
+  const appendAgentReply = async (
+    conversationId: string,
+    userMessage: string,
+    senderName: string
+  ) => {
+    try {
+      const response = await fetch("http://localhost:8000/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: userMessage }),
+      });
+
+      if (!response.ok) return;
+
+      const data = (await response.json()) as { reply?: string };
+      const replyText = data.reply?.trim();
+      if (!replyText) return;
+
+      const replyMessage: Message = {
+        id: uuidv4(),
+        content: replyText,
+        sender: senderName || "Agent",
+        timestamp: new Date().toISOString(),
+      };
+
+      setConversations((prev) => {
+        const updatedConversations = prev.map((existingConversation) =>
+          existingConversation.id === conversationId
+            ? {
+                ...existingConversation,
+                messages: [...existingConversation.messages, replyMessage],
+                lastMessageTime: new Date().toISOString(),
+              }
+            : existingConversation
+        );
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedConversations));
+        return updatedConversations;
+      });
+    } catch (error) {
+      console.error("Agent reply error:", error);
+    }
+  };
+
   const createNewConversation = (recipientNames: string[]) => {
     const recipients = recipientNames.map((name) => ({
       id: uuidv4(),
@@ -336,6 +379,11 @@ export default function App() {
       });
 
       window.history.pushState({}, "", `?id=${newConversation.id}`);
+      void appendAgentReply(
+        newConversation.id,
+        messageText,
+        newConversation.recipients[0]?.name || "Agent"
+      );
       return;
     }
 
@@ -365,6 +413,11 @@ export default function App() {
     setIsNewConversation(false);
     window.history.pushState({}, "", `?id=${conversationId}`);
     clearMessageDraft(conversationId);
+    void appendAgentReply(
+      conversationId,
+      messageText,
+      conversation.recipients[0]?.name || "Agent"
+    );
   };
 
   const handleDeleteConversation = (id: string) => {
