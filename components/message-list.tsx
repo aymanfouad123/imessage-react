@@ -132,6 +132,7 @@ export function MessageList({
             <div className={cn(message.id === activeMessageId && "z-30")}>
               <MessageBubble
                 message={message}
+                previousMessage={messages[index - 1]}
                 isLastUserMessage={index === lastUserMessageIndex}
                 conversation={conversation}
                 isTyping={false}

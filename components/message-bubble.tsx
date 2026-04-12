@@ -16,6 +16,7 @@ import { SilencedNotificationsMessage } from "./silenced-notifications-message";
 // Props for the MessageBubble component
 interface MessageBubbleProps {
   message: Message;
+  previousMessage?: Message;
   isLastUserMessage?: boolean;
   conversation?: Conversation;
   isTyping?: boolean;
@@ -36,6 +37,7 @@ const typingAnimation = `
 
 export function MessageBubble({
   message,
+  previousMessage,
   isLastUserMessage,
   conversation,
   isTyping,
@@ -48,7 +50,10 @@ export function MessageBubble({
   // Determine message sender type and display name
   const isSystemMessage = message.sender === "system";
   const isMe = message.sender === "me";
-  const showRecipientName = !isMe && !isSystemMessage;
+  const showRecipientName =
+    !isMe &&
+    !isSystemMessage &&
+    previousMessage?.sender !== message.sender;
   const recipientName = showRecipientName ? message.sender : null;
   const primaryRecipientName = conversation?.recipients[0]?.name;
   const silencedLabel =

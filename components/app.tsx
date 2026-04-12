@@ -18,6 +18,9 @@ import type {
 } from "@/lib/server/models";
 import type { Conversation } from "@/types";
 
+const AGENT_SERVICE_URL =
+  process.env.NEXT_PUBLIC_AGENT_SERVICE_URL ?? "http://localhost:8000";
+
 const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(url, {
     ...init,
@@ -35,6 +38,13 @@ const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   }
 
   return response.json() as Promise<T>;
+};
+
+const triggerAgentResponse = async (conversationId: string) => {
+  await fetchJson(`${AGENT_SERVICE_URL}/agent/respond`, {
+    method: "POST",
+    body: JSON.stringify({ chat_id: conversationId }),
+  });
 };
 
 export default function App() {
@@ -263,18 +273,35 @@ export default function App() {
         return;
       }
 
-      await fetchJson<SendMessageResponse>(
+      const { chat } = await fetchJson<SendMessageResponse>(
         `/api/chats/${conversationId}/messages`,
         {
           method: "POST",
           body: JSON.stringify({ text: messageText }),
         }
       );
+
       await loadOneChat(conversationId);
       setActiveConversation(conversationId);
       setIsNewConversation(false);
       window.history.pushState({}, "", `?id=${conversationId}`);
       clearMessageDraft(conversationId);
+
+      if (chat.is_agent_chat) {
+        const refreshInterval = window.setInterval(() => {
+          void loadOneChat(conversationId);
+        }, 500);
+
+        void triggerAgentResponse(conversationId)
+          .then(() => loadOneChat(conversationId))
+          .catch((error) => {
+            console.error("Error triggering agent response:", error);
+            toast({ description: "Agent response failed" });
+          })
+          .finally(() => {
+            window.clearInterval(refreshInterval);
+          });
+      }
     } catch (error) {
       console.error("Error sending message:", error);
       toast({ description: "Unable to send message" });

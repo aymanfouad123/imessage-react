@@ -6,6 +6,7 @@ import type {
   CreateChatRequest,
   Message,
   MessageService,
+  SendMessageRequest,
 } from "./models";
 
 const chats = new Map<string, Chat>();
@@ -50,6 +51,7 @@ const seedStore = () => {
         conversation.messages[0]?.timestamp ?? conversation.lastMessageTime,
       updated_at: conversation.lastMessageTime,
       unread_count: conversation.unreadCount,
+      is_agent_chat: conversation.isAgentChat,
     };
 
     const chatMessages = conversation.messages.map<Message>((message) => {
@@ -126,24 +128,31 @@ export const createChat = (request: CreateChatRequest) => {
   return { chat, message };
 };
 
-export const sendMessage = (chatId: string, text: string) => {
+export const sendMessage = (chatId: string, request: SendMessageRequest) => {
   const chat = chats.get(chatId);
   if (!chat) return null;
 
   const timestamp = nowIso();
+  const direction = request.direction ?? "outbound";
+  const isFromMe = direction === "outbound";
   const message: Message = {
     id: uuidv4(),
     chat_id: chatId,
-    is_from_me: true,
-    text,
+    from_handle: isFromMe ? undefined : request.sender_handle,
+    is_from_me: isFromMe,
+    text: request.text,
     created_at: timestamp,
     sent_at: timestamp,
-    delivered_at: timestamp,
-    read_at: timestamp,
+    delivered_at: isFromMe ? timestamp : null,
+    read_at: isFromMe ? timestamp : null,
     is_delivered: true,
-    is_read: true,
+    is_read: isFromMe,
   };
-  const updatedChat = { ...chat, updated_at: timestamp, unread_count: 0 };
+  const updatedChat = {
+    ...chat,
+    updated_at: timestamp,
+    unread_count: isFromMe ? 0 : (chat.unread_count ?? 0) + 1,
+  };
 
   messagesByChat.set(chatId, [...getMessages(chatId), message]);
   chats.set(chatId, updatedChat);

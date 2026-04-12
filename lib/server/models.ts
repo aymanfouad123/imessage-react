@@ -16,6 +16,7 @@ export interface Chat {
   created_at: string;
   updated_at: string;
   unread_count?: number;
+  is_agent_chat?: boolean;
 }
 
 export interface Message {
@@ -41,6 +42,8 @@ export interface CreateChatRequest {
 
 export interface SendMessageRequest {
   text: string;
+  direction?: "inbound" | "outbound";
+  sender_handle?: string;
 }
 
 export interface ListChatsResponse {

@@ -45,6 +45,7 @@ export const toUiConversation = ({
     messages: messages.map((message) => toUiMessage(message, chat)),
     lastMessageTime: chat.updated_at,
     unreadCount: chat.unread_count ?? 0,
+    isAgentChat: chat.is_agent_chat ?? false,
     pinned: false,
     hideAlerts: false,
   };

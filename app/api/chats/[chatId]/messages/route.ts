@@ -12,12 +12,36 @@ interface RouteContext {
 
 const parseSendMessageRequest = (
   body: unknown
-): SendMessageRequest | null => {
-  if (!body || typeof body !== "object") return null;
-  const text = (body as Record<string, unknown>).text;
-  return typeof text === "string" && text.trim()
-    ? { text: text.trim() }
-    : null;
+): SendMessageRequest | string => {
+  if (!body || typeof body !== "object") {
+    return "Request body must be an object";
+  }
+
+  const value = body as Record<string, unknown>;
+  const text = typeof value.text === "string" ? value.text.trim() : "";
+  const direction = value.direction;
+  const senderHandle =
+    typeof value.sender_handle === "string"
+      ? value.sender_handle.trim()
+      : undefined;
+
+  if (!text) return "text is required";
+  if (
+    direction !== undefined &&
+    direction !== "inbound" &&
+    direction !== "outbound"
+  ) {
+    return "direction must be inbound or outbound";
+  }
+  if (direction === "inbound" && !senderHandle) {
+    return "sender_handle is required for inbound messages";
+  }
+
+  return {
+    text,
+    direction,
+    sender_handle: senderHandle,
+  };
 };
 
 export async function GET(_request: Request, context: RouteContext) {
@@ -49,11 +73,11 @@ export async function POST(request: Request, context: RouteContext) {
   }
 
   const parsed = parseSendMessageRequest(body);
-  if (!parsed) {
-    return NextResponse.json({ error: "text is required" }, { status: 400 });
+  if (typeof parsed === "string") {
+    return NextResponse.json({ error: parsed }, { status: 400 });
   }
 
-  const result = sendMessage(chatId, parsed.text);
+  const result = sendMessage(chatId, parsed);
   if (!result) {
     return NextResponse.json({ error: "Chat not found" }, { status: 404 });
   }

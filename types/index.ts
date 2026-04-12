@@ -16,6 +16,7 @@ export interface Conversation {
   messages: Message[];
   lastMessageTime: string;
   unreadCount: number;
+  isAgentChat?: boolean;
   pinned?: boolean;
   isTyping?: boolean;
   hideAlerts?: boolean;
