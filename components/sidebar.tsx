@@ -32,6 +32,7 @@ interface SidebarProps {
   isCommandMenuOpen: boolean;
   onScroll?: (isScrolled: boolean) => void;
   onSoundToggle: () => void;
+  loadingFallback?: React.ReactNode;
 }
 
 export function Sidebar({
@@ -48,6 +49,7 @@ export function Sidebar({
   isCommandMenuOpen,
   onScroll,
   onSoundToggle,
+  loadingFallback,
 }: SidebarProps) {
   const { theme, systemTheme, setTheme } = useTheme();
   const effectiveTheme = theme === "system" ? systemTheme : theme;
@@ -320,8 +322,12 @@ export function Sidebar({
           bottomMargin="0px"
         >
           <div className={`${isMobileView ? "w-full" : "w-[320px]"} px-2`}>
-            <SearchBar value={searchTerm} onChange={onSearchChange} />
-            <div className="w-full">
+            {loadingFallback ? (
+              loadingFallback
+            ) : (
+              <>
+                <SearchBar value={searchTerm} onChange={onSearchChange} />
+                <div className="w-full">
               {filteredConversations.length === 0 && searchTerm ? (
                 <div className="py-2">
                   <p className="text-sm text-muted-foreground px-2 mt-4">
@@ -651,7 +657,9 @@ export function Sidebar({
                     })}
                 </>
               )}
-            </div>
+                </div>
+              </>
+            )}
           </div>
         </ScrollArea>
       </div>

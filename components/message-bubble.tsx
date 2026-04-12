@@ -394,12 +394,80 @@ export function MessageBubble({
                   </div>
                 </div>
               ) : (
-                <Popover
-                  open={isOpen}
-                  modal={true}
-                  onOpenChange={handleOpenChange}
-                >
-                  <PopoverTrigger asChild>
+                <>
+                  {onReaction ? (
+                    <Popover
+                      open={isOpen}
+                      modal={true}
+                      onOpenChange={handleOpenChange}
+                    >
+                      <PopoverTrigger asChild>
+                        <div className="flex flex-col cursor-pointer">
+                          {/* Add this to cover up the right border */}
+                          <div
+                            className={cn(
+                              "absolute border-r-[0.5px] border-background",
+                              !isMe ? "inset-[-17px]" : "inset-[-22px]",
+                            )}
+                          />
+                          <div className="text-[14px] flex items-center">
+                            {prepareContent(
+                              message.content,
+                              conversation?.recipients || [],
+                              message.sender,
+                            )}
+                          </div>
+                        </div>
+                      </PopoverTrigger>
+
+                      {/* Reaction menu */}
+                      <PopoverContent
+                        className="flex p-2 gap-2 w-fit rounded-full bg-gray-100 dark:bg-[#404040] z-50 reaction-menu"
+                        align={isMe ? "end" : "start"}
+                        alignOffset={-8}
+                        side="top"
+                        sideOffset={20}
+                      >
+                        {/* Reaction buttons */}
+                        {Object.entries(menuReactionIcons).map(
+                          ([type, icon]) => (
+                            <button
+                              key={type}
+                              onClick={() => {
+                                handleReaction(type as ReactionType);
+                              }}
+                              className={cn(
+                                "inline-flex items-center justify-center rounded-full w-8 h-8 aspect-square p-0 cursor-pointer text-base transition-all duration-200 ease-out text-gray-500 hover:scale-125 flex-shrink-0",
+                                isReactionActive(type as ReactionType)
+                                  ? "bg-[#0A7CFF] text-white scale-110"
+                                  : "",
+                              )}
+                            >
+                              <Image
+                                src={
+                                  isReactionActive(type as ReactionType)
+                                    ? icon
+                                        .replace("-gray", "-white")
+                                        .replace("-dark", "-white")
+                                    : icon
+                                }
+                                width={16}
+                                height={16}
+                                alt={`${type} reaction`}
+                                style={
+                                  type === "emphasize"
+                                    ? { transform: "scale(0.75)" }
+                                    : type === "question"
+                                      ? { transform: "scale(0.6)" }
+                                      : undefined
+                                }
+                              />
+                            </button>
+                          ),
+                        )}
+                      </PopoverContent>
+                    </Popover>
+                  ) : (
                     <div className="flex flex-col cursor-pointer">
                       {/* Add this to cover up the right border */}
                       <div
@@ -416,53 +484,8 @@ export function MessageBubble({
                         )}
                       </div>
                     </div>
-                  </PopoverTrigger>
-
-                  {/* Reaction menu */}
-                  <PopoverContent
-                    className="flex p-2 gap-2 w-fit rounded-full bg-gray-100 dark:bg-[#404040] z-50 reaction-menu"
-                    align={isMe ? "end" : "start"}
-                    alignOffset={-8}
-                    side="top"
-                    sideOffset={20}
-                  >
-                    {/* Reaction buttons */}
-                    {Object.entries(menuReactionIcons).map(([type, icon]) => (
-                      <button
-                        key={type}
-                        onClick={() => {
-                          handleReaction(type as ReactionType);
-                        }}
-                        className={cn(
-                          "inline-flex items-center justify-center rounded-full w-8 h-8 aspect-square p-0 cursor-pointer text-base transition-all duration-200 ease-out text-gray-500 hover:scale-125 flex-shrink-0",
-                          isReactionActive(type as ReactionType)
-                            ? "bg-[#0A7CFF] text-white scale-110"
-                            : "",
-                        )}
-                      >
-                        <Image
-                          src={
-                            isReactionActive(type as ReactionType)
-                              ? icon
-                                  .replace("-gray", "-white")
-                                  .replace("-dark", "-white")
-                              : icon
-                          }
-                          width={16}
-                          height={16}
-                          alt={`${type} reaction`}
-                          style={
-                            type === "emphasize"
-                              ? { transform: "scale(0.75)" }
-                              : type === "question"
-                                ? { transform: "scale(0.6)" }
-                                : undefined
-                          }
-                        />
-                      </button>
-                    ))}
-                  </PopoverContent>
-                </Popover>
+                  )}
+                </>
               )}
               {/* Display existing reactions */}
               {message.reactions && message.reactions.length > 0 && (

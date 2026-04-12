@@ -1,13 +1,41 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { v4 as uuidv4 } from "uuid";
 import { ChatArea } from "./chat-area";
 import { CommandMenu } from "./command-menu";
 import { Nav } from "./nav";
 import { Sidebar } from "./sidebar";
 import { useToast } from "@/hooks/use-toast";
-import { initialConversations } from "@/data/initial-conversations";
 import { soundEffects } from "@/lib/sound-effects";
-import { Conversation, Message, Reaction } from "@/types";
+import { toUiConversation } from "@/lib/chat-adapters";
+import type {
+  Chat,
+  CreateChatRequest,
+  ChatResponse,
+  CreateChatResponse,
+  ListChatsResponse,
+  MessagesResponse,
+  ReadChatResponse,
+  SendMessageResponse,
+} from "@/lib/server/models";
+import type { Conversation } from "@/types";
+
+const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...init?.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const error = (await response.json().catch(() => null)) as
+      | { error?: string }
+      | null;
+    throw new Error(error?.error ?? "Request failed");
+  }
+
+  return response.json() as Promise<T>;
+};
 
 export default function App() {
   const { toast } = useToast();
@@ -29,11 +57,58 @@ export default function App() {
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(soundEffects.isEnabled());
+  const [isLoadingChats, setIsLoadingChats] = useState(true);
 
   const commandMenuRef = useRef<{ setOpen: (open: boolean) => void }>(null);
-  // Bump version when replacing seed data so old localStorage blobs are not merged in
-  const STORAGE_KEY = "dialogueConversations_v3";
   const typingStatus = null;
+
+  const loadChatWithMessages = useCallback(async (chat: Chat) => {
+    const { messages } = await fetchJson<MessagesResponse>(
+      `/api/chats/${chat.id}/messages`
+    );
+    return toUiConversation({ chat, messages });
+  }, []);
+
+  const loadChats = useCallback(async () => {
+    const { chats } = await fetchJson<ListChatsResponse>("/api/chats");
+    const hydratedConversations = await Promise.all(
+      chats.map((chat) => loadChatWithMessages(chat))
+    );
+
+    setConversations(hydratedConversations);
+    return hydratedConversations;
+  }, [loadChatWithMessages]);
+
+  const loadOneChat = useCallback(async (conversationId: string) => {
+    const [{ chat }, { messages }] = await Promise.all([
+      fetchJson<ChatResponse>(`/api/chats/${conversationId}`),
+      fetchJson<MessagesResponse>(`/api/chats/${conversationId}/messages`),
+    ]);
+    const conversation = toUiConversation({ chat, messages });
+
+    setConversations((prev) => {
+      const exists = prev.some((item) => item.id === conversation.id);
+      if (!exists) return [conversation, ...prev];
+
+      return prev.map((item) =>
+        item.id === conversation.id ? conversation : item
+      );
+    });
+
+    return conversation;
+  }, []);
+
+  const markConversationRead = useCallback(async (conversationId: string) => {
+    const { chat, messages } = await fetchJson<ReadChatResponse>(
+      `/api/chats/${conversationId}/read`,
+      { method: "POST" }
+    );
+    const conversation = toUiConversation({ chat, messages });
+
+    setConversations((prev) =>
+      prev.map((item) => (item.id === conversationId ? conversation : item))
+    );
+  }, []);
 
   const selectConversation = useCallback(
     (conversationId: string | null) => {
@@ -43,58 +118,26 @@ export default function App() {
         return;
       }
 
-      const selectedConversation = conversations.find(
-        (conversation) => conversation.id === conversationId
-      );
-
-      if (!selectedConversation) {
-        window.history.pushState({}, "", "/");
-
-        if (conversations.length > 0) {
-          const fallbackConversation = conversations[0];
-          setActiveConversation(fallbackConversation.id);
-          window.history.pushState({}, "", `?id=${fallbackConversation.id}`);
-        } else {
-          setActiveConversation(null);
-        }
-        return;
-      }
-
       setActiveConversation(conversationId);
       setIsNewConversation(false);
       window.history.pushState({}, "", `?id=${conversationId}`);
+
+      void loadOneChat(conversationId).then(() =>
+        markConversationRead(conversationId).catch((error) => {
+          console.error("Error marking conversation read:", error);
+        })
+      );
     },
-    [conversations]
+    [loadOneChat, markConversationRead]
   );
-
-  useEffect(() => {
-    if (
-      activeConversation &&
-      !conversations.some((conversation) => conversation.id === activeConversation)
-    ) {
-      if (conversations.length > 0) {
-        selectConversation(conversations[0].id);
-      } else {
-        selectConversation(null);
-      }
-    }
-  }, [activeConversation, conversations, selectConversation]);
-
-  useEffect(() => {
-    if (conversations.length > 0) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
-    }
-  }, [conversations]);
 
   useEffect(() => {
     const handleResize = () => {
       const nextIsMobileView = window.innerWidth < 768;
-      if (isMobileView !== nextIsMobileView) {
-        setIsMobileView(nextIsMobileView);
+      setIsMobileView(nextIsMobileView);
 
-        if (!nextIsMobileView && !activeConversation && lastActiveConversation) {
-          selectConversation(lastActiveConversation);
-        }
+      if (!nextIsMobileView && !activeConversation && lastActiveConversation) {
+        selectConversation(lastActiveConversation);
       }
     };
 
@@ -103,82 +146,51 @@ export default function App() {
     window.addEventListener("resize", handleResize);
 
     return () => window.removeEventListener("resize", handleResize);
-  }, [
-    activeConversation,
-    isMobileView,
-    lastActiveConversation,
-    selectConversation,
-  ]);
+  }, [activeConversation, lastActiveConversation, selectConversation]);
 
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    const urlParams = new URLSearchParams(window.location.search);
-    const urlConversationId = urlParams.get("id");
-    let allConversations = [...initialConversations];
+    if (!isLayoutInitialized) return;
 
-    if (saved) {
+    const initializeChats = async () => {
       try {
-        const parsedConversations = JSON.parse(saved);
+        setIsLoadingChats(true);
+        const loadedConversations = await loadChats();
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlConversationId = urlParams.get("id");
 
-        if (!Array.isArray(parsedConversations)) {
+        if (
+          urlConversationId &&
+          loadedConversations.some(
+            (conversation) => conversation.id === urlConversationId
+          )
+        ) {
+          selectConversation(urlConversationId);
           return;
         }
 
-        const initialIds = new Set(initialConversations.map((conv) => conv.id));
-        const userConversations: Conversation[] = [];
-        const modifiedInitialConversations = new Map<string, Conversation>();
-
-        for (const savedConversation of parsedConversations as Conversation[]) {
-          if (initialIds.has(savedConversation.id)) {
-            modifiedInitialConversations.set(
-              savedConversation.id,
-              savedConversation
-            );
-          } else {
-            userConversations.push(savedConversation);
-          }
+        if (isMobileView) {
+          window.history.pushState({}, "", "/");
+          setActiveConversation(null);
+          return;
         }
 
-        allConversations = allConversations.map((conversation) =>
-          modifiedInitialConversations.get(conversation.id) ?? conversation
-        );
-        allConversations = [...allConversations, ...userConversations];
+        if (loadedConversations.length > 0) {
+          selectConversation(loadedConversations[0].id);
+        }
       } catch (error) {
-        console.error("Error parsing saved conversations:", error);
+        console.error("Error loading chats:", error);
+        toast({ description: "Unable to load chats" });
+      } finally {
+        setIsLoadingChats(false);
       }
-    }
+    };
 
-    setConversations(allConversations);
-
-    if (
-      urlConversationId &&
-      allConversations.some((conversation) => conversation.id === urlConversationId)
-    ) {
-      setActiveConversation(urlConversationId);
-      return;
-    }
-
-    if (isMobileView) {
-      window.history.pushState({}, "", "/");
-      setActiveConversation(null);
-      return;
-    }
-
-    if (allConversations.length > 0) {
-      setActiveConversation(allConversations[0].id);
-    }
-  }, [isMobileView]);
+    void initializeChats();
+  }, [isLayoutInitialized, isMobileView, loadChats, selectConversation, toast]);
 
   useEffect(() => {
     if (activeConversation) {
       setLastActiveConversation(activeConversation);
-      setConversations((prev) =>
-        prev.map((conversation) =>
-          conversation.id === activeConversation
-            ? { ...conversation, unreadCount: 0 }
-            : conversation
-        )
-      );
     }
   }, [activeConversation]);
 
@@ -210,349 +222,68 @@ export default function App() {
     return temp.textContent || "";
   };
 
-  const appendAgentReply = async (
-    conversationId: string,
-    userMessage: string,
-    senderName: string
+  const handleSendMessage = async (
+    messageHtml: string,
+    conversationId?: string
   ) => {
-    try {
-      const response = await fetch("http://localhost:8000/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMessage }),
-      });
-
-      if (!response.ok) return;
-
-      const data = (await response.json()) as { reply?: string };
-      const replyText = data.reply?.trim();
-      if (!replyText) return;
-
-      const replyMessage: Message = {
-        id: uuidv4(),
-        content: replyText,
-        sender: senderName || "Agent",
-        timestamp: new Date().toISOString(),
-      };
-
-      setConversations((prev) => {
-        const updatedConversations = prev.map((existingConversation) =>
-          existingConversation.id === conversationId
-            ? {
-                ...existingConversation,
-                messages: [...existingConversation.messages, replyMessage],
-                lastMessageTime: new Date().toISOString(),
-              }
-            : existingConversation
-        );
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedConversations));
-        return updatedConversations;
-      });
-    } catch (error) {
-      console.error("Agent reply error:", error);
-    }
-  };
-
-  const createNewConversation = (recipientNames: string[]) => {
-    const recipients = recipientNames.map((name) => ({
-      id: uuidv4(),
-      name,
-    }));
-
-    const newConversation: Conversation = {
-      id: uuidv4(),
-      recipients,
-      messages: [],
-      lastMessageTime: new Date().toISOString(),
-      unreadCount: 0,
-      hideAlerts: false,
-    };
-
-    setConversations((prev) => {
-      const updatedConversations = [newConversation, ...prev];
-      setActiveConversation(newConversation.id);
-      setIsNewConversation(false);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedConversations));
-      return updatedConversations;
-    });
-
-    window.history.pushState({}, "", `?id=${newConversation.id}`);
-  };
-
-  const updateConversationRecipients = (
-    conversationId: string,
-    recipientNames: string[]
-  ) => {
-    setConversations((prev) => {
-      const currentConversation = prev.find(
-        (conversation) => conversation.id === conversationId
-      );
-      if (!currentConversation) return prev;
-
-      const currentNames = currentConversation.recipients.map((r) => r.name);
-      const added = recipientNames.filter((name) => !currentNames.includes(name));
-      const removed = currentNames.filter(
-        (name) => !recipientNames.includes(name)
-      );
-
-      const timestamp = new Date().toLocaleString("en-US", {
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-      });
-
-      const systemMessages: Message[] = [
-        ...removed.map((name) => ({
-          id: uuidv4(),
-          content: `${timestamp}\n${name} was removed from the conversation`,
-          sender: "system" as const,
-          timestamp,
-        })),
-        ...added.map((name) => ({
-          id: uuidv4(),
-          content: `${timestamp}\n${name} was added to the conversation`,
-          sender: "system" as const,
-          timestamp,
-        })),
-      ];
-
-      const newRecipients = recipientNames.map((name) => {
-        const existingRecipient = currentConversation.recipients.find(
-          (recipient) => recipient.name === name
-        );
-        return existingRecipient ?? { id: uuidv4(), name };
-      });
-
-      return prev.map((conversation) =>
-        conversation.id === conversationId
-          ? {
-              ...conversation,
-              recipients: newRecipients,
-              messages: [...conversation.messages, ...systemMessages],
-              lastMessageTime: new Date().toISOString(),
-            }
-          : conversation
-      );
-    });
-  };
-
-  const handleSendMessage = (messageHtml: string, conversationId?: string) => {
     const messageText = extractMessageContent(messageHtml);
     if (!messageText.trim()) return;
 
-    const message: Message = {
-      id: uuidv4(),
-      content: messageText,
-      htmlContent: messageHtml,
-      sender: "me",
-      timestamp: new Date().toISOString(),
-    };
+    try {
+      if (!conversationId || isNewConversation) {
+        const handles = recipientInput
+          .split(",")
+          .map((recipient) => recipient.trim())
+          .filter(Boolean);
 
-    if (!conversationId || isNewConversation) {
-      const recipients = recipientInput
-        .split(",")
-        .map((recipient) => recipient.trim())
-        .filter(Boolean)
-        .map((name) => ({ id: uuidv4(), name }));
+        if (handles.length === 0) return;
 
-      if (recipients.length === 0) return;
+        const payload: CreateChatRequest = {
+          handles,
+          text: messageText,
+        };
+        const { chat, message } = await fetchJson<CreateChatResponse>(
+          "/api/chats",
+          {
+            method: "POST",
+            body: JSON.stringify(payload),
+          }
+        );
+        const newConversation = toUiConversation({
+          chat,
+          messages: [message],
+        });
 
-      const newConversation: Conversation = {
-        id: uuidv4(),
-        recipients,
-        messages: [message],
-        lastMessageTime: new Date().toISOString(),
-        unreadCount: 0,
-        hideAlerts: false,
-      };
-
-      setConversations((prev) => {
-        const updatedConversations = [newConversation, ...prev];
-        setActiveConversation(newConversation.id);
+        setConversations((prev) => [newConversation, ...prev]);
+        setActiveConversation(chat.id);
         setIsNewConversation(false);
         setRecipientInput("");
         clearMessageDraft("new");
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedConversations));
-        return updatedConversations;
-      });
-
-      window.history.pushState({}, "", `?id=${newConversation.id}`);
-      void appendAgentReply(
-        newConversation.id,
-        messageText,
-        newConversation.recipients[0]?.name || "Agent"
-      );
-      return;
-    }
-
-    const conversation = conversations.find(
-      (existingConversation) => existingConversation.id === conversationId
-    );
-    if (!conversation) return;
-
-    const updatedConversation: Conversation = {
-      ...conversation,
-      messages: [...conversation.messages, message],
-      lastMessageTime: new Date().toISOString(),
-      unreadCount: 0,
-    };
-
-    setConversations((prev) => {
-      const updatedConversations = prev.map((existingConversation) =>
-        existingConversation.id === conversationId
-          ? updatedConversation
-          : existingConversation
-      );
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedConversations));
-      return updatedConversations;
-    });
-
-    setActiveConversation(conversationId);
-    setIsNewConversation(false);
-    window.history.pushState({}, "", `?id=${conversationId}`);
-    clearMessageDraft(conversationId);
-    void appendAgentReply(
-      conversationId,
-      messageText,
-      conversation.recipients[0]?.name || "Agent"
-    );
-  };
-
-  const handleDeleteConversation = (id: string) => {
-    setConversations((prevConversations) => {
-      const newConversations = prevConversations.filter(
-        (conversation) => conversation.id !== id
-      );
-
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newConversations));
-
-      if (id === activeConversation && newConversations.length > 0) {
-        const sortedConversations = [...prevConversations].sort((a, b) => {
-          if (a.pinned && !b.pinned) return -1;
-          if (!a.pinned && b.pinned) return 1;
-          return (
-            new Date(b.lastMessageTime).getTime() -
-            new Date(a.lastMessageTime).getTime()
-          );
-        });
-
-        const deletedIndex = sortedConversations.findIndex(
-          (conversation) => conversation.id === id
-        );
-        const fallbackConversation =
-          deletedIndex === sortedConversations.length - 1
-            ? sortedConversations[deletedIndex - 1]
-            : sortedConversations[deletedIndex + 1];
-
-        selectConversation(fallbackConversation?.id ?? null);
-      } else if (newConversations.length === 0) {
-        selectConversation(null);
+        window.history.pushState({}, "", `?id=${chat.id}`);
+        return;
       }
 
-      return newConversations;
-    });
-
-    toast({ description: "Conversation deleted" });
-  };
-
-  const handleUpdateConversation = (
-    nextConversations: Conversation[],
-    updateType?: "pin" | "mute"
-  ) => {
-    const updatedConversation = nextConversations.find(
-      (conversation) => conversation.id === activeConversation
-    );
-
-    setConversations(nextConversations);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextConversations));
-
-    if (!updatedConversation) return;
-
-    if (updateType === "pin") {
-      toast({
-        description: updatedConversation.pinned
-          ? "Conversation pinned"
-          : "Conversation unpinned",
-      });
-    }
-
-    if (updateType === "mute") {
-      toast({
-        description: updatedConversation.hideAlerts
-          ? "Conversation muted"
-          : "Conversation unmuted",
-      });
+      await fetchJson<SendMessageResponse>(
+        `/api/chats/${conversationId}/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({ text: messageText }),
+        }
+      );
+      await loadOneChat(conversationId);
+      setActiveConversation(conversationId);
+      setIsNewConversation(false);
+      window.history.pushState({}, "", `?id=${conversationId}`);
+      clearMessageDraft(conversationId);
+    } catch (error) {
+      console.error("Error sending message:", error);
+      toast({ description: "Unable to send message" });
     }
   };
 
-  const handleReaction = useCallback((messageId: string, reaction: Reaction) => {
-    setConversations((prevConversations) =>
-      prevConversations.map((conversation) => ({
-        ...conversation,
-        messages: conversation.messages.map((message) => {
-          if (message.id !== messageId) return message;
-
-          const existingReaction = message.reactions?.find(
-            (currentReaction) =>
-              currentReaction.sender === reaction.sender &&
-              currentReaction.type === reaction.type
-          );
-
-          if (existingReaction) {
-            return {
-              ...message,
-              reactions:
-                message.reactions?.filter(
-                  (currentReaction) =>
-                    !(
-                      currentReaction.sender === reaction.sender &&
-                      currentReaction.type === reaction.type
-                    )
-                ) || [],
-            };
-          }
-
-          const otherReactions =
-            message.reactions?.filter(
-              (currentReaction) => currentReaction.sender !== reaction.sender
-            ) || [];
-
-          return {
-            ...message,
-            reactions: [...otherReactions, reaction],
-          };
-        }),
-      }))
-    );
-  }, []);
-
-  const handleUpdateConversationName = useCallback(
-    (name: string) => {
-      setConversations((prevConversations) =>
-        prevConversations.map((conversation) =>
-          conversation.id === activeConversation
-            ? { ...conversation, name }
-            : conversation
-        )
-      );
-    },
-    [activeConversation]
-  );
-
-  const handleHideAlertsChange = useCallback(
-    (hide: boolean) => {
-      setConversations((prevConversations) =>
-        prevConversations.map((conversation) =>
-          conversation.id === activeConversation
-            ? { ...conversation, hideAlerts: hide }
-            : conversation
-        )
-      );
-    },
-    [activeConversation]
-  );
+  const handleUnsupportedConversationAction = useCallback(() => {
+    toast({ description: "This action is outside milestone one" });
+  }, [toast]);
 
   const handleSoundToggle = useCallback(() => {
     soundEffects.toggleSound();
@@ -563,10 +294,6 @@ export default function App() {
     (total, conversation) => total + (conversation.unreadCount || 0),
     0
   );
-
-  if (!isLayoutInitialized) {
-    return null;
-  }
 
   return (
     <div className="flex h-dvh">
@@ -580,8 +307,8 @@ export default function App() {
           window.history.pushState({}, "", "/");
         }}
         onSelectConversation={selectConversation}
-        onDeleteConversation={handleDeleteConversation}
-        onUpdateConversation={handleUpdateConversation}
+        onDeleteConversation={handleUnsupportedConversationAction}
+        onUpdateConversation={handleUnsupportedConversationAction}
         onOpenChange={setIsCommandMenuOpen}
         soundEnabled={soundEnabled}
         onSoundToggle={handleSoundToggle}
@@ -599,8 +326,8 @@ export default function App() {
               conversations={conversations}
               activeConversation={activeConversation}
               onSelectConversation={selectConversation}
-              onDeleteConversation={handleDeleteConversation}
-              onUpdateConversation={handleUpdateConversation}
+              onDeleteConversation={handleUnsupportedConversationAction}
+              onUpdateConversation={handleUnsupportedConversationAction}
               isMobileView={isMobileView}
               searchTerm={searchTerm}
               onSearchChange={setSearchTerm}
@@ -608,6 +335,11 @@ export default function App() {
               isCommandMenuOpen={isCommandMenuOpen}
               onScroll={setIsScrolled}
               onSoundToggle={handleSoundToggle}
+              loadingFallback={
+                isLoadingChats && conversations.length === 0 ? (
+                  <ChatListLoadingState />
+                ) : undefined
+              }
             >
               <Nav
                 onNewChat={() => {
@@ -622,7 +354,7 @@ export default function App() {
             </Sidebar>
           </div>
           <div
-            className={`h-full flex-1 ${
+            className={`relative h-full flex-1 ${
               isMobileView && !activeConversation && !isNewConversation
                 ? "hidden"
                 : "block"
@@ -645,13 +377,8 @@ export default function App() {
                 selectConversation(null);
               }}
               onSendMessage={handleSendMessage}
-              onReaction={handleReaction}
               typingStatus={typingStatus}
               conversationId={activeConversation || ""}
-              onUpdateConversationRecipients={updateConversationRecipients}
-              onCreateConversation={createNewConversation}
-              onUpdateConversationName={handleUpdateConversationName}
-              onHideAlertsChange={handleHideAlertsChange}
               messageDraft={
                 isNewConversation
                   ? messageDrafts["new"] || ""
@@ -660,9 +387,60 @@ export default function App() {
               onMessageDraftChange={handleMessageDraftChange}
               unreadCount={totalUnreadCount}
             />
+            {isLoadingChats && conversations.length === 0 ? (
+              <ThreadLoadingState />
+            ) : null}
           </div>
         </div>
       </main>
+    </div>
+  );
+}
+
+function ChatListLoadingState() {
+  return (
+    <div className="px-4 pt-4 space-y-5" aria-label="Loading chats">
+      <div className="space-y-2">
+        <div className="h-3 w-24 rounded bg-muted-foreground/15 animate-pulse" />
+        <div className="grid grid-cols-3 gap-4">
+          {[0, 1, 2].map((item) => (
+            <div key={item} className="flex flex-col items-center gap-2">
+              <div className="h-14 w-14 rounded-full bg-muted-foreground/15 animate-pulse" />
+              <div className="h-2.5 w-12 rounded bg-muted-foreground/15 animate-pulse" />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="space-y-3">
+        {[0, 1, 2, 3].map((item) => (
+          <div key={item} className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-muted-foreground/15 animate-pulse" />
+            <div className="flex-1 space-y-2">
+              <div className="h-3 w-2/5 rounded bg-muted-foreground/15 animate-pulse" />
+              <div className="h-2.5 w-4/5 rounded bg-muted-foreground/10 animate-pulse" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ThreadLoadingState() {
+  return (
+    <div
+      className="pointer-events-none absolute inset-0 bg-background"
+      aria-label="Loading conversation"
+    >
+      <div className="h-full px-6 pt-20 pb-24 flex flex-col justify-end gap-4">
+        <div className="max-w-[70%] space-y-2">
+          <div className="h-4 w-24 rounded bg-muted-foreground/15 animate-pulse" />
+          <div className="h-10 w-64 max-w-full rounded-[18px] bg-muted-foreground/15 animate-pulse" />
+        </div>
+        <div className="ml-auto h-10 w-56 max-w-[70%] rounded-[18px] bg-[#0A7CFF]/25 animate-pulse" />
+        <div className="h-10 w-72 max-w-[75%] rounded-[18px] bg-muted-foreground/15 animate-pulse" />
+        <div className="ml-auto h-10 w-48 max-w-[65%] rounded-[18px] bg-[#0A7CFF]/25 animate-pulse" />
+      </div>
     </div>
   );
 }

@@ -150,9 +150,13 @@ export function ChatArea({
                       ? typingStatus
                       : null
                   }
-                  onReaction={(messageId, reaction) => {
-                    onReaction?.(messageId, reaction);
-                  }}
+                  onReaction={
+                    onReaction
+                      ? (messageId, reaction) => {
+                          onReaction(messageId, reaction);
+                        }
+                      : undefined
+                  }
                   conversationId={conversationId}
                   messageInputRef={messageInputRef}
                   isMobileView={isMobileView}
