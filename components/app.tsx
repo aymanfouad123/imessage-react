@@ -20,6 +20,14 @@ import type { Conversation } from "@/types";
 
 const AGENT_SERVICE_URL =
   process.env.NEXT_PUBLIC_AGENT_SERVICE_URL ?? "http://localhost:8000";
+const AGENT_TYPING_DELAY_MS = 1200;
+const AGENT_READ_RECEIPT_DELAY_MS = 1000;
+
+type AgentReceiptState = {
+  conversationId: string;
+  messageId: string;
+  status: "delivered" | "read";
+};
 
 const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(url, {
@@ -47,6 +55,28 @@ const triggerAgentResponse = async (conversationId: string) => {
   });
 };
 
+const withMessageStatus = (
+  conversation: Conversation | undefined,
+  receiptState: AgentReceiptState | null
+) => {
+  if (!conversation || !receiptState) return conversation;
+  if (conversation.id !== receiptState.conversationId) return conversation;
+
+  const messageIndex = conversation.messages.findIndex(
+    (message) => message.id === receiptState.messageId
+  );
+  if (messageIndex === -1) return conversation;
+
+  return {
+    ...conversation,
+    messages: conversation.messages.map((message, index) =>
+      index === messageIndex
+        ? { ...message, status: receiptState.status }
+        : message
+    ),
+  };
+};
+
 export default function App() {
   const { toast } = useToast();
   const [isNewConversation, setIsNewConversation] = useState(false);
@@ -68,9 +98,30 @@ export default function App() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(soundEffects.isEnabled());
   const [isLoadingChats, setIsLoadingChats] = useState(true);
+  const [agentTypingConversationId, setAgentTypingConversationId] = useState<
+    string | null
+  >(null);
+  const [agentReceiptState, setAgentReceiptState] =
+    useState<AgentReceiptState | null>(null);
 
   const commandMenuRef = useRef<{ setOpen: (open: boolean) => void }>(null);
-  const typingStatus = null;
+  const typingConversation = agentTypingConversationId
+    ? conversations.find((conversation) => conversation.id === agentTypingConversationId)
+    : null;
+  const typingStatus =
+    agentTypingConversationId && typingConversation
+      ? {
+          conversationId: agentTypingConversationId,
+          recipient: typingConversation.recipients[0]?.name ?? "Agent",
+        }
+      : null;
+  const selectedConversation = activeConversation
+    ? conversations.find((conversation) => conversation.id === activeConversation)
+    : undefined;
+  const displayedConversation = withMessageStatus(
+    selectedConversation,
+    agentReceiptState
+  );
 
   const loadChatWithMessages = useCallback(async (chat: Chat) => {
     const { messages } = await fetchJson<MessagesResponse>(
@@ -78,6 +129,28 @@ export default function App() {
     );
     return toUiConversation({ chat, messages });
   }, []);
+
+  const markMessageStatusLocally = useCallback(
+    (
+      conversationId: string,
+      messageId: string,
+      status: AgentReceiptState["status"]
+    ) => {
+      setConversations((prev) =>
+        prev.map((conversation) => {
+          if (conversation.id !== conversationId) return conversation;
+
+          return {
+            ...conversation,
+            messages: conversation.messages.map((message) =>
+              message.id === messageId ? { ...message, status } : message
+            ),
+          };
+        })
+      );
+    },
+    []
+  );
 
   const loadChats = useCallback(async () => {
     const { chats } = await fetchJson<ListChatsResponse>("/api/chats");
@@ -273,7 +346,7 @@ export default function App() {
         return;
       }
 
-      const { chat } = await fetchJson<SendMessageResponse>(
+      const { chat, message } = await fetchJson<SendMessageResponse>(
         `/api/chats/${conversationId}/messages`,
         {
           method: "POST",
@@ -288,18 +361,57 @@ export default function App() {
       clearMessageDraft(conversationId);
 
       if (chat.is_agent_chat) {
+        setAgentReceiptState({
+          conversationId,
+          messageId: message.id,
+          status: "delivered",
+        });
+        markMessageStatusLocally(conversationId, message.id, "delivered");
+
+        const readReceiptDelay = window.setTimeout(() => {
+          setAgentReceiptState({
+            conversationId,
+            messageId: message.id,
+            status: "read",
+          });
+          markMessageStatusLocally(conversationId, message.id, "read");
+        }, AGENT_READ_RECEIPT_DELAY_MS);
+
+        const typingDelay = window.setTimeout(() => {
+          setAgentTypingConversationId(conversationId);
+        }, AGENT_READ_RECEIPT_DELAY_MS + AGENT_TYPING_DELAY_MS);
+
         const refreshInterval = window.setInterval(() => {
-          void loadOneChat(conversationId);
+          void loadOneChat(conversationId).then((conversation) => {
+            const hasAgentReply = conversation.messages.some(
+              (item) =>
+                item.sender !== "me" &&
+                item.sender !== "system" &&
+                new Date(item.timestamp).getTime() >
+                  new Date(message.created_at).getTime()
+            );
+
+            if (hasAgentReply) {
+              setAgentTypingConversationId((current) =>
+                current === conversationId ? null : current
+              );
+            }
+          });
         }, 500);
 
         void triggerAgentResponse(conversationId)
           .then(() => loadOneChat(conversationId))
           .catch((error) => {
+            window.clearTimeout(readReceiptDelay);
             console.error("Error triggering agent response:", error);
             toast({ description: "Agent response failed" });
           })
           .finally(() => {
+            window.clearTimeout(typingDelay);
             window.clearInterval(refreshInterval);
+            setAgentTypingConversationId((current) =>
+              current === conversationId ? null : current
+            );
           });
       }
     } catch (error) {
@@ -389,13 +501,7 @@ export default function App() {
           >
             <ChatArea
               isNewChat={isNewConversation}
-              activeConversation={
-                activeConversation
-                  ? conversations.find(
-                      (conversation) => conversation.id === activeConversation
-                    )
-                  : undefined
-              }
+              activeConversation={displayedConversation}
               recipientInput={recipientInput}
               setRecipientInput={setRecipientInput}
               isMobileView={isMobileView}

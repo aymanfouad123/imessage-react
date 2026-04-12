@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import { Message, ReactionType, Reaction } from "../types";
 import { Conversation } from "../types";
-import { useCallback, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import {
   Popover,
   PopoverContent,
@@ -34,6 +34,42 @@ const typingAnimation = `
   100% { opacity: 0.3; }
 }
 `;
+
+function ReceiptLabel({
+  status,
+  justSent,
+}: {
+  status?: "delivered" | "read";
+  justSent: boolean;
+}) {
+  const label = status === "read" ? "Read" : "Delivered";
+  const [displayLabel, setDisplayLabel] = useState(label);
+  const [isVisible, setIsVisible] = useState(true);
+
+  useEffect(() => {
+    if (label === displayLabel) return;
+
+    setIsVisible(false);
+    const swapTimer = window.setTimeout(() => {
+      setDisplayLabel(label);
+      setIsVisible(true);
+    }, 180);
+
+    return () => window.clearTimeout(swapTimer);
+  }, [displayLabel, label]);
+
+  return (
+    <span
+      className={cn(
+        "inline-block transition-opacity duration-200 ease-out",
+        isVisible ? "opacity-100" : "opacity-0",
+        justSent && "animate-scale-in"
+      )}
+    >
+      {displayLabel}
+    </span>
+  );
+}
 
 export function MessageBubble({
   message,
@@ -228,11 +264,6 @@ export function MessageBubble({
     effectiveTheme === "dark"
       ? "/message-bubbles/left-bubble-dark.svg"
       : "/message-bubbles/left-bubble-light.svg";
-  const typingIndicatorSvg =
-    effectiveTheme === "dark"
-      ? "/typing-bubbles/chat-typing-dark.svg"
-      : "/typing-bubbles/chat-typing-light.svg";
-
   const getReactionIconSvg = (
     reactionFromMe: boolean,
     messageFromMe: boolean,
@@ -355,17 +386,13 @@ export function MessageBubble({
                 ? {
                     borderImageSlice: isMe ? "31 43 31 31" : "31 31 31 43",
                     borderImageSource: `url('${
-                      isMe
-                        ? rightBubbleSvg
-                        : isTyping
-                          ? typingIndicatorSvg
-                          : leftBubbleSvg
+                      isMe ? rightBubbleSvg : leftBubbleSvg
                     }')`,
                   }
                 : undefined
             }
           >
-            <div className={cn(!isTyping && "-my-2.5 -mx-1")}>
+            <div className="-my-2.5 -mx-1">
               {/* Message content or typing indicator */}
               {isTyping ? (
                 <div className="flex flex-col">
@@ -377,7 +404,7 @@ export function MessageBubble({
                     )}
                   />
                   <div className="text-[14px] flex items-center">
-                    <div className="flex items-center justify-center gap-[4px] bg-gray-100 dark:bg-[#404040]">
+                    <div className="flex h-[20px] min-w-[34px] items-center justify-center gap-[4px] bg-gray-100 dark:bg-[#404040]">
                       <style>{typingAnimation}</style>
                       <div
                         className="w-1.5 h-1.5 rounded-full bg-gray-500 dark:bg-gray-300"
@@ -562,7 +589,7 @@ export function MessageBubble({
       {/* Show "Delivered" for last message from current user */}
       {isMe && isLastUserMessage && !isTyping && (
         <div className="text-[10px] text-gray-500 pt-1 pr-1 bg-background text-right">
-          <span className={cn(justSent && "animate-scale-in")}>Delivered</span>
+          <ReceiptLabel status={message.status} justSent={justSent} />
         </div>
       )}
       {/* Spacer after messages */}
