@@ -14,6 +14,7 @@ pnpm dev
 - The app is now client-only for chat behavior.
 - AI routes, evals, and AI-specific dependencies were removed.
 - `pnpm build` passes.
+- Chat sandbox system context lives in [`docs/chat-api.md`](docs/chat-api.md).
 
 ## Credits
 
