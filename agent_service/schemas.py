@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 MessageDirection = Literal["inbound", "outbound"]
+MemorySenderType = Literal["user", "agent"]
 
 
 class HealthResponse(BaseModel):
@@ -16,16 +17,41 @@ class AgentRespondRequest(BaseModel):
 
 class AgentRespondResponse(BaseModel):
     chat_id: str
+    status: Literal["replied", "skipped"] = "replied"
     bubbles: list[str]
     message_ids: list[str]
+    reason: str | None = None
 
 
-class AgentChatBubble(BaseModel):
+class ReasonerOutput(BaseModel):
+    should_reply: bool = True
+    draft_response: str = ""
+    reason: str | None = None
+    needs_tool: bool = False
+    tool_intent: str | None = None
+
+
+class FormattedBubble(BaseModel):
     text: str = Field(min_length=1)
+    send_after_ms: int | None = None
 
 
-class AgentOutput(BaseModel):
-    bubbles: list[AgentChatBubble] = Field(min_length=1, max_length=3)
+class FormatterOutput(BaseModel):
+    bubbles: list[FormattedBubble] = Field(min_length=1, max_length=10)
+
+
+class MemoryMessage(BaseModel):
+    id: str
+    sender_type: MemorySenderType
+    sender: str
+    text: str
+    created_at: str
+
+
+class ConversationMemory(BaseModel):
+    messages: list[MemoryMessage]
+    latest_user_message: MemoryMessage | None = None
+    latest_agent_message: MemoryMessage | None = None
 
 
 class SandboxChatHandle(BaseModel):
