@@ -47,6 +47,9 @@ class Settings:
     agent_delay_jitter_max_seconds: float = float(
         os.getenv("AGENT_DELAY_JITTER_MAX_SECONDS", "0.35")
     )
+    # Bubbles shorter than this (after whitespace collapse) merge into a neighbor
+    # so quick setup lines do not sit alone before a long reply.
+    agent_min_bubble_chars: int = _get_int("AGENT_MIN_BUBBLE_CHARS", 28)
 
 
 settings = Settings()

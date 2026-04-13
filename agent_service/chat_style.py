@@ -3,8 +3,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from config import settings
-from schemas import FormattedBubble, FormatterOutput
+from .config import settings
+from .schemas import FormattedBubble, FormatterOutput
 
 
 MAX_BUBBLES = 10
@@ -46,6 +46,38 @@ def clamp_delay_ms(delay_ms: int | None, text: str, index: int) -> int:
     return int(seconds * 1000)
 
 
+def _merge_short_bubbles(
+    bubbles: list[FormattedBubble], min_chars: int
+) -> list[FormattedBubble]:
+    """Merge very short bubbles into a neighbor so setup lines do not stand alone."""
+    if min_chars <= 0 or len(bubbles) <= 1:
+        return bubbles
+
+    merged: list[FormattedBubble] = []
+    i = 0
+    while i < len(bubbles):
+        b = bubbles[i]
+        text_len = len(_compact(b.text))
+        if text_len < min_chars and i + 1 < len(bubbles):
+            nxt = bubbles[i + 1]
+            combined = _compact(f"{b.text} {nxt.text}")
+            merged.append(
+                FormattedBubble(text=combined, send_after_ms=nxt.send_after_ms)
+            )
+            i += 2
+        elif text_len < min_chars and merged:
+            prev = merged.pop()
+            combined = _compact(f"{prev.text} {b.text}")
+            merged.append(
+                FormattedBubble(text=combined, send_after_ms=b.send_after_ms)
+            )
+            i += 1
+        else:
+            merged.append(b)
+            i += 1
+    return merged
+
+
 def _merge_overflow(bubbles: list[FormattedBubble]) -> list[FormattedBubble]:
     cleaned = [
         FormattedBubble(text=_compact(bubble.text), send_after_ms=bubble.send_after_ms)
@@ -60,6 +92,8 @@ def _merge_overflow(bubbles: list[FormattedBubble]) -> list[FormattedBubble]:
         tail_text = _compact(" ".join(bubble.text for bubble in cleaned[MAX_BUBBLES - 1 :]))
         tail_delay = cleaned[MAX_BUBBLES - 1].send_after_ms
         cleaned = [*head, FormattedBubble(text=tail_text, send_after_ms=tail_delay)]
+
+    cleaned = _merge_short_bubbles(cleaned, settings.agent_min_bubble_chars)
 
     normalized: list[FormattedBubble] = []
     for index, bubble in enumerate(cleaned):

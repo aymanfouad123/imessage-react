@@ -1,10 +1,23 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 MessageDirection = Literal["inbound", "outbound"]
 MemorySenderType = Literal["user", "agent"]
+AgentStreamEventType = Literal[
+    "typing.started",
+    "message.persisted",
+    "message.delivered",
+    "message.read",
+    "reaction.added",
+    "reaction.removed",
+    "task.started",
+    "task.update",
+    "task.completed",
+    "run.completed",
+    "error",
+]
 
 
 class HealthResponse(BaseModel):
@@ -21,6 +34,21 @@ class AgentRespondResponse(BaseModel):
     bubbles: list[str]
     message_ids: list[str]
     reason: str | None = None
+
+
+class AgentStreamEvent(BaseModel):
+    type: AgentStreamEventType
+    run_id: str
+    chat_id: str | None = None
+    bubble_id: str | None = None
+    message_id: str | None = None
+    text: str | None = None
+    task_id: str | None = None
+    task_label: str | None = None
+    error: str | None = None
+    reason: str | None = None
+    payload: dict[str, Any] | None = None
+    created_at: str
 
 
 class ReasonerOutput(BaseModel):

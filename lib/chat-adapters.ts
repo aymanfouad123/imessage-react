@@ -23,12 +23,20 @@ export const toUiMessage = (
   chat: Chat
 ): Message => {
   const fallbackHandle = getNonMeHandles(chat)[0]?.handle ?? "Unknown";
+  const status = message.is_from_me
+    ? message.is_read
+      ? "read"
+      : message.is_delivered
+        ? "delivered"
+        : undefined
+    : undefined;
 
   return {
     id: message.id,
     content: message.text,
     sender: message.is_from_me ? "me" : message.from_handle ?? fallbackHandle,
     timestamp: message.created_at,
+    status,
   };
 };
 

@@ -1,5 +1,5 @@
-from config import settings
-from schemas import ConversationMemory, MemoryMessage, SandboxMessage
+from .config import settings
+from .schemas import ConversationMemory, MemoryMessage, SandboxMessage
 
 
 def _to_memory_message(message: SandboxMessage) -> MemoryMessage:

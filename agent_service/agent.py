@@ -1,9 +1,10 @@
 from agents import Agent, Runner
 from pydantic import ValidationError
 
-from config import settings
-from memory import format_memory
-from schemas import ConversationMemory, FormatterOutput, ReasonerOutput
+from .chat_style import normalize_bubbles
+from .config import settings
+from .memory import format_memory
+from .schemas import ConversationMemory, FormattedBubble, FormatterOutput, ReasonerOutput
 
 
 REASONER_INSTRUCTIONS = """
@@ -33,6 +34,7 @@ Avoid section-label casing like Ingredients, Steps, Method, or Notes unless the 
 Do not split in the middle of a word, phrase, URL, date, or numbered step.
 For long informational answers, compress into a few natural messages instead of dumping a full list.
 Avoid markdown, bullets, numbered lists, empty bubbles, and assistant-like setup phrases.
+Do not use a separate tiny first bubble (for example a bare "sure —" or "ok —") unless it is a complete reply; fold short openers into the next bubble when you will send more right after.
 Set send_after_ms for each bubble to a realistic delay before sending it.
 Use shorter delays for quick replies and longer delays for more thoughtful follow-ups.
 """.strip()
@@ -77,7 +79,7 @@ async def run_reasoner(memory: ConversationMemory) -> ReasonerOutput:
 
 async def run_formatter(
     draft_response: str, memory: ConversationMemory
-) -> FormatterOutput | str:
+) -> list[FormattedBubble]:
     input_text = "\n\n".join(
         [
             f"Recent thread:\n{format_memory(memory)}",
@@ -89,9 +91,9 @@ async def run_formatter(
     final_output = result.final_output
 
     if isinstance(final_output, FormatterOutput):
-        return final_output
+        return normalize_bubbles(final_output)
 
     try:
-        return FormatterOutput.model_validate(final_output)
+        return normalize_bubbles(FormatterOutput.model_validate(final_output))
     except ValidationError:
-        return str(final_output).strip()
+        return normalize_bubbles(str(final_output).strip())

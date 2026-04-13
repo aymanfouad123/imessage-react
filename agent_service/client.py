@@ -1,12 +1,10 @@
-import asyncio
-import json
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin
-from urllib.request import Request, urlopen
 
-from config import settings
-from schemas import (
+import httpx
+from pydantic import ValidationError
+
+from .config import settings
+from .schemas import (
     SandboxChat,
     SandboxChatResponse,
     SandboxListChatsResponse,
@@ -24,43 +22,88 @@ class SandboxClientError(Exception):
         self.status_code = status_code
 
 
-def _sandbox_url(path: str) -> str:
-    base_url = settings.sandbox_base_url.rstrip("/") + "/"
-    return urljoin(base_url, path.lstrip("/"))
+_client: httpx.AsyncClient | None = None
 
 
-def _request_json(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
-    body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    request = Request(
-        _sandbox_url(path),
-        data=body,
-        method=method,
+async def startup() -> None:
+    global _client
+    if _client is not None:
+        return
+
+    _client = httpx.AsyncClient(
+        base_url=settings.sandbox_base_url.rstrip("/"),
         headers={"Accept": "application/json", "Content-Type": "application/json"},
+        timeout=httpx.Timeout(10.0),
     )
 
+
+async def shutdown() -> None:
+    global _client
+    if _client is None:
+        return
+
+    await _client.aclose()
+    _client = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    if _client is None:
+        raise SandboxClientError("sandbox_client_not_started", 500)
+
+    return _client
+
+
+def _extract_error_detail(response: httpx.Response) -> str:
     try:
-        with urlopen(request, timeout=10) as response:
-            response_body = response.read().decode("utf-8")
-    except HTTPError as exc:
-        error_body = exc.read().decode("utf-8")
-        detail = error_body or exc.reason
-        raise SandboxClientError(
-            f"sandbox_http_error {exc.code}: {detail}", status_code=exc.code
-        ) from exc
-    except URLError as exc:
-        raise SandboxClientError(f"sandbox_unreachable: {exc.reason}") from exc
+        data = response.json()
+    except ValueError:
+        return response.text or response.reason_phrase
+
+    if isinstance(data, dict):
+        detail = data.get("error") or data.get("detail")
+        if detail:
+            return str(detail)
+
+    return response.text or response.reason_phrase
+
+
+async def _request_json(
+    method: str, path: str, payload: dict[str, Any] | None = None
+) -> Any:
+    if _client is None:
+        await startup()
 
     try:
-        return json.loads(response_body) if response_body else {}
-    except json.JSONDecodeError as exc:
+        response = await _get_client().request(method, path, json=payload)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        detail = _extract_error_detail(exc.response)
+        raise SandboxClientError(
+            f"sandbox_http_error {status_code}: {detail}", status_code=status_code
+        ) from exc
+    except httpx.TimeoutException as exc:
+        raise SandboxClientError("sandbox_timeout") from exc
+    except httpx.HTTPError as exc:
+        raise SandboxClientError(f"sandbox_unreachable: {exc}") from exc
+
+    if not response.content:
+        return {}
+
+    try:
+        return response.json()
+    except ValueError as exc:
         raise SandboxClientError("sandbox returned invalid JSON") from exc
 
 
 async def _request_model(
     model_type: type[Any], method: str, path: str, payload: dict[str, Any] | None = None
 ) -> Any:
-    data = await asyncio.to_thread(_request_json, method, path, payload)
-    return model_type.model_validate(data)
+    data = await _request_json(method, path, payload)
+    try:
+        return model_type.model_validate(data)
+    except ValidationError as exc:
+        raise SandboxClientError("sandbox returned an unexpected response shape") from exc
 
 
 async def list_chats() -> list[SandboxChat]:
