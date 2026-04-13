@@ -6,7 +6,7 @@ export interface Message {
   timestamp: string;
   status?: "delivered" | "read";
   type?: "silenced";
-  mentions?: { id: string; name: string; }[];
+  mentions?: { id: string; name: string; start?: number; end?: number }[];
   reactions?: Reaction[];
 }
 

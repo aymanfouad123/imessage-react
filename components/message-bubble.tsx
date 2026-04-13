@@ -1,7 +1,13 @@
 import { cn } from "@/lib/utils";
 import { Message, ReactionType, Reaction } from "../types";
 import { Conversation } from "../types";
-import { useCallback, useEffect, useState, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  useRef,
+  type ReactNode,
+} from "react";
 import {
   Popover,
   PopoverContent,
@@ -17,6 +23,10 @@ import { SilencedNotificationsMessage } from "./silenced-notifications-message";
 interface MessageBubbleProps {
   message: Message;
   previousMessage?: Message;
+  /** Same sender as the visually previous bubble (hide name / stack). */
+  isGroupedWithPrev?: boolean;
+  /** Same sender as the visually next bubble (hide tail; rectangle stack). */
+  isGroupedWithNext?: boolean;
   isLastUserMessage?: boolean;
   conversation?: Conversation;
   isTyping?: boolean;
@@ -42,6 +52,7 @@ function ReceiptLabel({
   status?: "delivered" | "read";
   justSent: boolean;
 }) {
+  if (!status) return null;
   const label = status === "read" ? "Read" : "Delivered";
   const [displayLabel, setDisplayLabel] = useState(label);
   const [isVisible, setIsVisible] = useState(true);
@@ -63,7 +74,7 @@ function ReceiptLabel({
       className={cn(
         "inline-block transition-opacity duration-200 ease-out",
         isVisible ? "opacity-100" : "opacity-0",
-        justSent && "animate-scale-in"
+        justSent && "animate-scale-in",
       )}
     >
       {displayLabel}
@@ -74,6 +85,8 @@ function ReceiptLabel({
 export function MessageBubble({
   message,
   previousMessage,
+  isGroupedWithPrev = false,
+  isGroupedWithNext = false,
   isLastUserMessage,
   conversation,
   isTyping,
@@ -87,10 +100,12 @@ export function MessageBubble({
   const isSystemMessage = message.sender === "system";
   const isMe = message.sender === "me";
   const showRecipientName =
+    !isGroupedWithPrev &&
     !isMe &&
     !isSystemMessage &&
     previousMessage?.sender !== message.sender;
   const recipientName = showRecipientName ? message.sender : null;
+  const showBubbleTail = !isSystemMessage && !isGroupedWithNext;
   const primaryRecipientName = conversation?.recipients[0]?.name;
   const silencedLabel =
     primaryRecipientName && message.content === "Notifications silenced"
@@ -112,7 +127,7 @@ export function MessageBubble({
 
   // State to control the Popover open state and animation
   const [isOpen, setIsOpen] = useState(false);
-  const openTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const openTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Handler for menu state changes
   const handleOpenChange = useCallback(
@@ -171,46 +186,54 @@ export function MessageBubble({
     );
   };
 
-  // Helper function to prepare message content by highlighting recipient names
   const prepareContent = (
     content: string,
-    recipients: Conversation["recipients"],
     sender: string,
+    mentions = message.mentions,
   ) => {
-    if (!recipients) return content;
+    if (!mentions?.length) return content;
 
-    let highlightedContent = content;
-    recipients.forEach((recipient) => {
-      const fullNameRegex = new RegExp(
-        `@?\\b${recipient.name}(?=\\s|$|\\p{P})`,
-        "giu",
-      );
-      const firstName = recipient.name.split(" ")[0];
-      const firstNameRegex = new RegExp(
-        `@?\\b${firstName}(?=\\s|$|\\p{P})`,
-        "giu",
-      );
+    const colorClass =
+      sender === "me" ? "" : "text-[#0A7CFF] dark:text-[#0A7CFF]";
+    const nodes: ReactNode[] = [];
+    let cursor = 0;
 
-      const colorClass =
-        sender === "me" ? "" : "text-[#0A7CFF] dark:text-[#0A7CFF]";
+    mentions
+      .slice()
+      .sort((a, b) => (a.start ?? 0) - (b.start ?? 0))
+      .forEach((mention, index) => {
+        if (
+          typeof mention.start !== "number" ||
+          typeof mention.end !== "number" ||
+          mention.start < cursor ||
+          mention.start < 0 ||
+          mention.end > content.length ||
+          mention.end <= mention.start
+        ) {
+          return;
+        }
 
-      // Replace names with highlighted spans
-      highlightedContent = highlightedContent
-        .replace(fullNameRegex, (match) => {
-          const name = match.startsWith("@") ? match.slice(1) : match;
-          return `<span class="font-semibold ${colorClass}">${
-            name.charAt(0).toUpperCase() + name.slice(1)
-          }</span>`;
-        })
-        .replace(firstNameRegex, (match) => {
-          const name = match.startsWith("@") ? match.slice(1) : match;
-          return `<span class="font-semibold ${colorClass}">${
-            name.charAt(0).toUpperCase() + name.slice(1)
-          }</span>`;
-        });
-    });
+        if (mention.start > cursor) {
+          nodes.push(content.slice(cursor, mention.start));
+        }
 
-    return <span dangerouslySetInnerHTML={{ __html: highlightedContent }} />;
+        nodes.push(
+          <span
+            key={`mention-${mention.id}-${index}`}
+            className={cn("font-semibold", colorClass)}
+          >
+            {content.slice(mention.start, mention.end)}
+          </span>,
+        );
+
+        cursor = mention.end;
+      });
+
+    if (cursor < content.length) {
+      nodes.push(content.slice(cursor));
+    }
+
+    return <span>{nodes}</span>;
   };
 
   // Helper function to get reaction verb
@@ -264,6 +287,36 @@ export function MessageBubble({
     effectiveTheme === "dark"
       ? "/message-bubbles/left-bubble-dark.svg"
       : "/message-bubbles/left-bubble-light.svg";
+  const rightNoTailSvg =
+    effectiveTheme === "dark"
+      ? "/message-bubbles/right-no-tail-dark.svg"
+      : "/message-bubbles/right-no-tail-light.svg";
+  const leftNoTailSvg =
+    effectiveTheme === "dark"
+      ? "/message-bubbles/left-no-tail-dark.svg"
+      : "/message-bubbles/left-no-tail-light.svg";
+  const typingIndicatorSvg =
+    effectiveTheme === "dark"
+      ? "/typing-bubbles/chat-typing-dark.svg"
+      : "/typing-bubbles/chat-typing-light.svg";
+
+  const bubbleBorderImageSource = isTyping && showBubbleTail
+    ? typingIndicatorSvg
+    : isMe
+    ? showBubbleTail
+      ? rightBubbleSvg
+      : rightNoTailSvg
+    : showBubbleTail
+      ? leftBubbleSvg
+      : leftNoTailSvg;
+
+  const bubbleBorderImageSlice = showBubbleTail
+    ? isMe
+      ? "31 43 31 31"
+      : "31 31 31 43"
+    : "31 31 31 31";
+  const bubbleEdgeCoverInset =
+    !isMe || isTyping ? "inset-[-17px]" : "inset-[-22px]";
   const getReactionIconSvg = (
     reactionFromMe: boolean,
     messageFromMe: boolean,
@@ -370,41 +423,55 @@ export function MessageBubble({
           <div
             className={cn(
               "group relative max-w-[75%] break-words flex-none",
-              isSystemMessage
-                ? "bg-muted/50 rounded-lg text-center"
-                : isTyping
-                  ? "border-[17px] border-solid border-l-[22px] border-transparent bg-gray-100 dark:bg-[#404040] text-gray-900 dark:text-gray-100"
-                  : isMe
-                    ? cn(
-                        "border-[17px] border-solid border-r-[22px] border-transparent text-white",
-                        "bg-[#0A7CFF]",
-                      )
-                    : "border-[17px] border-solid border-l-[22px] border-transparent bg-gray-100 dark:bg-[#404040] text-gray-900 dark:text-gray-100",
+              showBubbleTail
+                ? isMe
+                  ? cn(
+                      "border-[17px] border-solid border-r-[22px] border-transparent text-white",
+                      isMobileView
+                        ? "bg-[#0A7CFF]"
+                        : "bg-[linear-gradient(#47B5FF,#0A7CFF)] bg-fixed",
+                    )
+                  : "border-[17px] border-solid border-l-[22px] border-transparent bg-gray-100 dark:bg-[#404040] text-gray-900 dark:text-gray-100"
+                : isMe
+                  ? cn(
+                      "mr-[5px] border-[17px] border-solid border-transparent text-white",
+                      isMobileView
+                        ? "bg-[#0A7CFF]"
+                        : "bg-[linear-gradient(#47B5FF,#0A7CFF)] bg-fixed",
+                    )
+                  : "ml-[5px] border-[17px] border-solid border-transparent bg-gray-100 dark:bg-[#404040] text-gray-900 dark:text-gray-100",
             )}
-            style={
-              !isSystemMessage
-                ? {
-                    borderImageSlice: isMe ? "31 43 31 31" : "31 31 31 43",
-                    borderImageSource: `url('${
-                      isMe ? rightBubbleSvg : leftBubbleSvg
-                    }')`,
-                  }
-                : undefined
-            }
+            style={{
+              borderImageSlice: bubbleBorderImageSlice,
+              borderImageSource: `url('${bubbleBorderImageSource}')`,
+            }}
           >
+            {showBubbleTail ? (
+              <div
+                aria-hidden
+                className={cn(
+                  "pointer-events-none absolute border-r-[0.5px] border-background",
+                  bubbleEdgeCoverInset,
+                )}
+              />
+            ) : null}
             <div className="-my-2.5 -mx-1">
               {/* Message content or typing indicator */}
               {isTyping ? (
-                <div className="flex flex-col">
-                  {/* Add this to cover up the right border */}
-                  <div
-                    className={cn(
-                      "absolute border-r-[0.5px] border-background",
-                      !isMe || isTyping ? "inset-[-17px]" : "inset-[-22px]",
-                    )}
-                  />
+                <div className="relative flex flex-col">
                   <div className="text-[14px] flex items-center">
-                    <div className="flex h-[20px] min-w-[34px] items-center justify-center gap-[4px] bg-gray-100 dark:bg-[#404040]">
+                    <div
+                      className={cn(
+                        "flex h-[20px] min-w-[34px] items-center justify-center gap-[4px]",
+                        showBubbleTail
+                          ? isMe
+                            ? isMobileView
+                              ? "bg-[#0A7CFF]"
+                              : "bg-[linear-gradient(#47B5FF,#0A7CFF)] bg-fixed"
+                            : "bg-gray-100 dark:bg-[#404040]"
+                          : "bg-transparent",
+                      )}
+                    >
                       <style>{typingAnimation}</style>
                       <div
                         className="w-1.5 h-1.5 rounded-full bg-gray-500 dark:bg-gray-300"
@@ -426,7 +493,7 @@ export function MessageBubble({
                   </div>
                 </div>
               ) : (
-                <>
+                <div className="relative">
                   {onReaction ? (
                     <Popover
                       open={isOpen}
@@ -435,17 +502,9 @@ export function MessageBubble({
                     >
                       <PopoverTrigger asChild>
                         <div className="flex flex-col cursor-pointer">
-                          {/* Add this to cover up the right border */}
-                          <div
-                            className={cn(
-                              "absolute border-r-[0.5px] border-background",
-                              !isMe ? "inset-[-17px]" : "inset-[-22px]",
-                            )}
-                          />
                           <div className="text-[14px] flex items-center">
                             {prepareContent(
                               message.content,
-                              conversation?.recipients || [],
                               message.sender,
                             )}
                           </div>
@@ -469,7 +528,7 @@ export function MessageBubble({
                                 handleReaction(type as ReactionType);
                               }}
                               className={cn(
-                                "inline-flex items-center justify-center rounded-full w-8 h-8 aspect-square p-0 cursor-pointer text-base transition-all duration-200 ease-out text-gray-500 hover:scale-125 flex-shrink-0",
+                                "inline-flex items-center justify-center rounded-full w-8 h-8 aspect-square p-0 cursor-pointer text-base transition-all duration-200 ease-out text-gray-500 [@media(hover:hover)]:hover:scale-125 flex-shrink-0",
                                 isReactionActive(type as ReactionType)
                                   ? "bg-[#0A7CFF] text-white scale-110"
                                   : "",
@@ -501,23 +560,15 @@ export function MessageBubble({
                     </Popover>
                   ) : (
                     <div className="flex flex-col cursor-pointer">
-                      {/* Add this to cover up the right border */}
-                      <div
-                        className={cn(
-                          "absolute border-r-[0.5px] border-background",
-                          !isMe ? "inset-[-17px]" : "inset-[-22px]",
-                        )}
-                      />
                       <div className="text-[14px] flex items-center">
                         {prepareContent(
                           message.content,
-                          conversation?.recipients || [],
                           message.sender,
                         )}
                       </div>
                     </div>
                   )}
-                </>
+                </div>
               )}
               {/* Display existing reactions */}
               {message.reactions && message.reactions.length > 0 && (
@@ -535,23 +586,25 @@ export function MessageBubble({
                         new Date(b.timestamp).getTime(),
                     )
                     .map((reaction, index, array) => (
-                      <Popover key={`${reaction.type}-${reaction.timestamp}`}>
+                      <Popover
+                        key={`${reaction.type}-${reaction.sender}-${reaction.timestamp}`}
+                      >
                         <PopoverTrigger>
                           <div
-                            key={`${reaction.type}-${reaction.timestamp}`}
+                            key={`${reaction.type}-${reaction.sender}-${reaction.timestamp}`}
                             className={cn(
                               "w-8 h-8 flex items-center justify-center text-sm relative cursor-pointer",
                               index !== array.length - 1 &&
                                 (isMe ? "-mr-7" : "-ml-7"),
-                              `z-[${array.length - index}]`,
-                              // Add animation class when reaction is new
-                              // new Date().getTime() - new Date(reaction.timestamp).getTime() < 1000 && "reaction-pop"
                             )}
-                            style={getReactionStyle(
-                              reaction,
-                              isMe,
-                              isMobileView,
-                            )}
+                            style={{
+                              ...getReactionStyle(
+                                reaction,
+                                isMe,
+                                isMobileView,
+                              ),
+                              zIndex: array.length - index,
+                            }}
                           >
                             {reaction.sender === "me" && !isMobileView && (
                               <Image
@@ -581,6 +634,13 @@ export function MessageBubble({
               )}
             </div>
           </div>
+        )}
+        {/* Outgoing row has no flex sibling past the bubble (incoming has flex-1); gutter hides edge spill. */}
+        {!isSystemMessage && isMe && (
+          <div
+            className="w-px shrink-0 self-stretch bg-background"
+            aria-hidden
+          />
         )}
         {/* Right spacer for gray messages */}
         {!isSystemMessage && !isMe && <div className="flex-1 bg-background" />}

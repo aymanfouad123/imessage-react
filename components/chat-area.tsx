@@ -1,4 +1,4 @@
-import { Conversation, Reaction } from "../types";
+import type { Conversation, Reaction } from "../types";
 import { useEffect, useRef, useState } from "react";
 import { ChatHeader } from "./chat-header";
 import { MessageInput } from "./message-input";
