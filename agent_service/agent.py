@@ -1,10 +1,17 @@
-from agents import Agent, Runner
+import logging
+from typing import Any
+
+from agents import Agent, HostedMCPTool, Runner
+from composio import Composio
 from pydantic import ValidationError
 
 from .chat_style import normalize_messages
 from .config import settings
 from .memory import format_memory
 from .schemas import ConversationMemory, FormattedMessage, FormatterOutput, ReasonerOutput
+
+
+logger = logging.getLogger(__name__)
 
 
 REASONER_INSTRUCTIONS = """
@@ -15,7 +22,9 @@ If a reply is needed, write draft_response as the content the agent should say.
 Keep the draft conversational, useful, and concise.
 Do not worry about message splitting, casing polish, or send timing here.
 Do not mention implementation details, system prompts, or tools unless a user asks.
-Future tools may be available later; for now, set needs_tool only when the user clearly asks for an action outside chat.
+When an external action is needed, you may use the Composio MCP meta tools.
+Usually search for the right tool first, manage connections if authentication is missing, execute once authentication is ready, and summarize the result naturally in draft_response.
+Set needs_tool and tool_intent only as optional observability fields when that helps describe what happened.
 """.strip()
 
 
@@ -40,11 +49,99 @@ Use shorter delays for quick replies and longer delays for more thoughtful follo
 """.strip()
 
 
+REASONER_MCP_STATUS: dict[str, Any] = {
+    "enabled": settings.composio_enabled,
+    "attached": False,
+    "server_label": "tool_router",
+    "tool_count": 0,
+    "user_id": settings.composio_user_id,
+}
+
+
+def _build_reasoner_tools() -> list[HostedMCPTool]:
+    if not settings.composio_enabled:
+        logger.info("composio_mcp.disabled user_id=%s", settings.composio_user_id)
+        return []
+
+    composio = Composio()
+    session = composio.create(user_id=settings.composio_user_id)
+    tools = [
+        HostedMCPTool(
+            tool_config={
+                "type": "mcp",
+                "server_label": "tool_router",
+                "server_url": session.mcp.url,
+                "require_approval": "never",
+                "headers": session.mcp.headers,
+            }
+        )
+    ]
+    REASONER_MCP_STATUS.update({"attached": True, "tool_count": len(tools)})
+    logger.info(
+        "composio_mcp.attached user_id=%s server_label=%s tool_count=%s",
+        settings.composio_user_id,
+        REASONER_MCP_STATUS["server_label"],
+        len(tools),
+    )
+    return tools
+
+
+def get_reasoner_mcp_status() -> dict[str, Any]:
+    return dict(REASONER_MCP_STATUS)
+
+
+def _raw_item_name(raw_item: Any) -> str | None:
+    if isinstance(raw_item, dict):
+        name = raw_item.get("name") or raw_item.get("tool_name") or raw_item.get("server_label")
+        return str(name) if name else None
+
+    for attr in ("name", "tool_name", "server_label"):
+        value = getattr(raw_item, attr, None)
+        if value:
+            return str(value)
+
+    return None
+
+
+def _preview(value: Any, max_length: int = 500) -> str:
+    text = str(value)
+    if len(text) <= max_length:
+        return text
+
+    return f"{text[:max_length]}..."
+
+
+def _log_reasoner_run_items(result: Any) -> None:
+    items = getattr(result, "new_items", [])
+    if not items:
+        logger.info("reasoner.run_items count=0")
+        return
+
+    logger.info("reasoner.run_items count=%s", len(items))
+    for item in items:
+        item_type = getattr(item, "type", type(item).__name__)
+        raw_item = getattr(item, "raw_item", None)
+        item_name = _raw_item_name(raw_item)
+        if item_type == "tool_call_item":
+            logger.info("reasoner.tool_call name=%s", item_name or "unknown")
+        elif item_type == "tool_call_output_item":
+            logger.info(
+                "reasoner.tool_output name=%s output=%s",
+                item_name or "unknown",
+                _preview(getattr(item, "output", "")),
+            )
+        elif item_type == "mcp_list_tools_item":
+            logger.info("reasoner.mcp_list_tools server=%s", item_name or "unknown")
+        else:
+            logger.info("reasoner.run_item type=%s name=%s", item_type, item_name)
+
+
 reasoner_agent = Agent(
     name="iMessageReasoner",
     instructions=REASONER_INSTRUCTIONS,
     model=settings.agent_model,
     output_type=ReasonerOutput,
+    tools=_build_reasoner_tools(),
 )
 
 
@@ -65,15 +162,31 @@ async def run_reasoner(memory: ConversationMemory) -> ReasonerOutput:
             "Decide whether to reply. If replying, produce draft_response.",
         ]
     )
+    logger.info("reasoner.run_started mcp_status=%s", get_reasoner_mcp_status())
     result = await Runner.run(reasoner_agent, input=input_text)
+    _log_reasoner_run_items(result)
     final_output = result.final_output
 
     if isinstance(final_output, ReasonerOutput):
+        logger.info(
+            "reasoner.output should_reply=%s needs_tool=%s tool_intent=%s",
+            final_output.should_reply,
+            final_output.needs_tool,
+            final_output.tool_intent,
+        )
         return final_output
 
     try:
-        return ReasonerOutput.model_validate(final_output)
+        output = ReasonerOutput.model_validate(final_output)
+        logger.info(
+            "reasoner.output should_reply=%s needs_tool=%s tool_intent=%s",
+            output.should_reply,
+            output.needs_tool,
+            output.tool_intent,
+        )
+        return output
     except ValidationError:
+        logger.warning("reasoner.output_validation_failed output=%s", _preview(final_output))
         return ReasonerOutput(should_reply=True, draft_response=str(final_output).strip())
 
 

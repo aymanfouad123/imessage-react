@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from .agent import run_formatter, run_reasoner
+from .agent import get_reasoner_mcp_status, run_formatter, run_reasoner
 from .client import (
     SandboxClientError,
     find_default_agent_chat,
@@ -132,6 +132,7 @@ async def stream_response_events(
             chat_id=chat_id,
             task_id=reasoner_task_id,
             task_label="reasoner",
+            payload={"mcp": get_reasoner_mcp_status()},
         )
         reasoner_output = await run_reasoner(memory)
         yield _event(
@@ -140,7 +141,12 @@ async def stream_response_events(
             chat_id=chat_id,
             task_id=reasoner_task_id,
             task_label="reasoner",
-            payload={"should_reply": reasoner_output.should_reply},
+            payload={
+                "should_reply": reasoner_output.should_reply,
+                "needs_tool": reasoner_output.needs_tool,
+                "tool_intent": reasoner_output.tool_intent,
+                "mcp": get_reasoner_mcp_status(),
+            },
         )
 
         if not reasoner_output.should_reply:

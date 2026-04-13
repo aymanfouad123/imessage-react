@@ -1,5 +1,9 @@
+import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+
+logging.basicConfig(level=os.getenv("AGENT_LOG_LEVEL", "INFO").upper())
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware

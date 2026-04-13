@@ -62,6 +62,14 @@ const mergeMessageStatus = (
   return messageStatusRank[next] >= messageStatusRank[current] ? next : current;
 };
 
+const mergeOptionalMessageStatus = (
+  current: Message["status"],
+  next: Message["status"]
+): Message["status"] => {
+  if (!next) return current;
+  return mergeMessageStatus(current, next);
+};
+
 const mergeMessages = (current: Message[], incoming: Message[]) => {
   const byId = new Map<string, Message>();
 
@@ -71,7 +79,19 @@ const mergeMessages = (current: Message[], incoming: Message[]) => {
 
   for (const message of incoming) {
     const existing = byId.get(message.id);
-    byId.set(message.id, existing ? { ...existing, ...message } : message);
+    byId.set(
+      message.id,
+      existing
+        ? {
+            ...existing,
+            ...message,
+            status:
+              existing.sender === "me" || message.sender === "me"
+                ? mergeOptionalMessageStatus(existing.status, message.status)
+                : message.status,
+          }
+        : message
+    );
   }
 
   return [...byId.values()].sort(
@@ -275,6 +295,37 @@ export default function App() {
     []
   );
 
+  const markLatestUserMessageReadLocally = useCallback(
+    (conversationId: string) => {
+      setConversations((prev) =>
+        prev.map((conversation) => {
+          if (conversation.id !== conversationId) return conversation;
+
+          const latestUserMessage = [...conversation.messages]
+            .reverse()
+            .find((message) => message.sender === "me");
+          if (!latestUserMessage) return conversation;
+
+          let didChange = false;
+          const nextConversation = {
+            ...conversation,
+            messages: conversation.messages.map((message) => {
+              if (message.id !== latestUserMessage.id) return message;
+
+              const nextStatus = mergeMessageStatus(message.status, "read");
+              if (nextStatus === message.status) return message;
+              didChange = true;
+              return { ...message, status: nextStatus };
+            }),
+          };
+
+          return didChange ? nextConversation : conversation;
+        })
+      );
+    },
+    []
+  );
+
   const clearStreamState = useCallback((conversationId: string) => {
     setAgentTypingConversationId((current) =>
       current === conversationId ? null : current
@@ -335,6 +386,7 @@ export default function App() {
     async (conversationId: string, event: AgentStreamEvent) => {
       if (event.type === "typing.started") {
         setAgentTypingConversationId(conversationId);
+        markLatestUserMessageReadLocally(conversationId);
         return;
       }
 
@@ -378,7 +430,12 @@ export default function App() {
         throw new Error(event.error ?? "Agent response failed");
       }
     },
-    [clearStreamState, loadOneChat, markMessageStatusLocally]
+    [
+      clearStreamState,
+      loadOneChat,
+      markLatestUserMessageReadLocally,
+      markMessageStatusLocally,
+    ]
   );
 
   const startAgentResponse = useCallback(

@@ -21,11 +21,21 @@ def _get_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _get_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    return raw_value.lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     agent_model: str = os.getenv("AGENT_MODEL", "gpt-5.4-mini")
     agent_formatter_model: str = os.getenv("AGENT_FORMATTER_MODEL", "gpt-5.4-mini")
+    composio_enabled: bool = _get_bool("COMPOSIO_ENABLED", True)
+    composio_user_id: str = os.getenv("COMPOSIO_USER_ID", "user_xgge7l")
     sandbox_base_url: str = os.getenv("SANDBOX_BASE_URL", "http://localhost:3000")
     agent_sender_handle: str = os.getenv("AGENT_SENDER_HANDLE", "John Doe")
     memory_window_size: int = _get_int("MEMORY_WINDOW_SIZE", 20)
