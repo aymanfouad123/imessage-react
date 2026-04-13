@@ -32,14 +32,14 @@ class Settings:
     agent_enable_idempotency: bool = (
         os.getenv("AGENT_ENABLE_IDEMPOTENCY", "true").lower() == "true"
     )
-    agent_first_bubble_delay_seconds: float = float(
-        os.getenv("AGENT_FIRST_BUBBLE_DELAY_SECONDS", "1.2")
+    agent_first_message_delay_seconds: float = float(
+        os.getenv("AGENT_FIRST_MESSAGE_DELAY_SECONDS", "1.2")
     )
-    agent_min_bubble_delay_seconds: float = float(
-        os.getenv("AGENT_MIN_BUBBLE_DELAY_SECONDS", "0.7")
+    agent_min_message_delay_seconds: float = float(
+        os.getenv("AGENT_MIN_MESSAGE_DELAY_SECONDS", "0.7")
     )
-    agent_max_bubble_delay_seconds: float = float(
-        os.getenv("AGENT_MAX_BUBBLE_DELAY_SECONDS", "2.2")
+    agent_max_message_delay_seconds: float = float(
+        os.getenv("AGENT_MAX_MESSAGE_DELAY_SECONDS", "2.2")
     )
     agent_typing_chars_per_second: float = float(
         os.getenv("AGENT_TYPING_CHARS_PER_SECOND", "32")
@@ -47,9 +47,9 @@ class Settings:
     agent_delay_jitter_max_seconds: float = float(
         os.getenv("AGENT_DELAY_JITTER_MAX_SECONDS", "0.35")
     )
-    # Bubbles shorter than this (after whitespace collapse) merge into a neighbor
-    # so quick setup lines do not sit alone before a long reply.
-    agent_min_bubble_chars: int = _get_int("AGENT_MIN_BUBBLE_CHARS", 28)
+    # Message chunks shorter than this merge into a neighbor so quick setup
+    # lines do not sit alone before a longer reply.
+    agent_min_message_chars: int = _get_int("AGENT_MIN_MESSAGE_CHARS", 28)
 
 
 settings = Settings()

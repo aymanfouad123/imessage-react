@@ -10,7 +10,6 @@ from .client import (
     find_default_agent_chat,
     get_chat,
     get_messages,
-    mark_chat_read,
     send_message,
 )
 from .config import settings
@@ -21,8 +20,7 @@ from .schemas import (
     AgentStreamEvent,
     AgentStreamEventType,
     ConversationMemory,
-    FormattedBubble,
-    SandboxMessage,
+    FormattedMessage,
     SandboxSendMessageRequest,
 )
 
@@ -43,7 +41,6 @@ def _event(
     run_id: str,
     *,
     chat_id: str | None = None,
-    bubble_id: str | None = None,
     message_id: str | None = None,
     text: str | None = None,
     task_id: str | None = None,
@@ -56,7 +53,6 @@ def _event(
         type=event_type,
         run_id=run_id,
         chat_id=chat_id,
-        bubble_id=bubble_id,
         message_id=message_id,
         text=text,
         task_id=task_id,
@@ -68,18 +64,9 @@ def _event(
     )
 
 
-def _bubble_delay_seconds(bubble: FormattedBubble) -> float:
-    base_delay = (bubble.send_after_ms or 0) / 1000
+def _send_delay_seconds(message: FormattedMessage) -> float:
+    base_delay = (message.send_after_ms or 0) / 1000
     return base_delay + random.uniform(0, settings.agent_delay_jitter_max_seconds)
-
-
-def _latest_unread_non_agent_inbound(
-    messages: list[SandboxMessage],
-) -> SandboxMessage | None:
-    for message in reversed(messages):
-        if not message.is_from_me and message.from_handle != settings.agent_sender_handle:
-            return message
-    return None
 
 
 def _agent_already_replied(memory: ConversationMemory) -> bool:
@@ -124,7 +111,7 @@ async def stream_response_events(
                 run_id,
                 chat_id=chat_id,
                 reason="no user message to respond to",
-                payload={"status": "skipped", "message_ids": [], "bubbles": []},
+                payload={"status": "skipped", "message_ids": [], "messages": []},
             )
             return
 
@@ -134,21 +121,9 @@ async def stream_response_events(
                 run_id,
                 chat_id=chat_id,
                 reason="agent already replied to latest user message",
-                payload={"status": "skipped", "message_ids": [], "bubbles": []},
+                payload={"status": "skipped", "message_ids": [], "messages": []},
             )
             return
-
-        latest_inbound = _latest_unread_non_agent_inbound(messages)
-        if latest_inbound is not None and not latest_inbound.is_read:
-            await mark_chat_read(chat_id)
-            messages = await get_messages(chat_id)
-            memory = build_memory(messages)
-            yield _event(
-                "message.read",
-                run_id,
-                chat_id=chat_id,
-                message_id=latest_inbound.id,
-            )
 
         reasoner_task_id = str(uuid4())
         yield _event(
@@ -174,7 +149,7 @@ async def stream_response_events(
                 run_id,
                 chat_id=chat_id,
                 reason=reasoner_output.reason or "reasoner chose not to reply",
-                payload={"status": "skipped", "message_ids": [], "bubbles": []},
+                payload={"status": "skipped", "message_ids": [], "messages": []},
             )
             return
 
@@ -184,7 +159,7 @@ async def stream_response_events(
                 run_id,
                 chat_id=chat_id,
                 reason="reasoner returned an empty draft",
-                payload={"status": "skipped", "message_ids": [], "bubbles": []},
+                payload={"status": "skipped", "message_ids": [], "messages": []},
             )
             return
 
@@ -196,43 +171,41 @@ async def stream_response_events(
             task_id=formatter_task_id,
             task_label="formatter",
         )
-        bubbles = await run_formatter(reasoner_output.draft_response, memory)
+        staged_messages = await run_formatter(reasoner_output.draft_response, memory)
         yield _event(
             "task.completed",
             run_id,
             chat_id=chat_id,
             task_id=formatter_task_id,
             task_label="formatter",
-            payload={"bubble_count": len(bubbles)},
+            payload={"message_count": len(staged_messages)},
         )
 
         message_ids: list[str] = []
-        bubble_texts: list[str] = []
-        for bubble in bubbles:
+        message_texts: list[str] = []
+        for staged_message in staged_messages:
             current_memory = build_memory(await get_messages(chat_id))
             if _latest_user_message_id(current_memory) != target_user_message_id:
                 yield _event(
                     "run.completed",
                     run_id,
                     chat_id=chat_id,
-                    reason="newer user message arrived before this bubble was sent",
+                    reason="newer user message arrived before this message was sent",
                     payload={
                         "status": "skipped",
                         "message_ids": message_ids,
-                        "bubbles": bubble_texts,
+                        "messages": message_texts,
                     },
                 )
                 return
 
-            bubble_id = str(uuid4())
             yield _event(
                 "typing.started",
                 run_id,
                 chat_id=chat_id,
-                bubble_id=bubble_id,
                 payload={"sender_handle": settings.agent_sender_handle},
             )
-            await asyncio.sleep(_bubble_delay_seconds(bubble))
+            await asyncio.sleep(_send_delay_seconds(staged_message))
 
             current_memory = build_memory(await get_messages(chat_id))
             if _latest_user_message_id(current_memory) != target_user_message_id:
@@ -240,11 +213,11 @@ async def stream_response_events(
                     "run.completed",
                     run_id,
                     chat_id=chat_id,
-                    reason="newer user message arrived while this bubble was waiting",
+                    reason="newer user message arrived while this message was waiting",
                     payload={
                         "status": "skipped",
                         "message_ids": message_ids,
-                        "bubbles": bubble_texts,
+                        "messages": message_texts,
                     },
                 )
                 return
@@ -252,18 +225,17 @@ async def stream_response_events(
             response = await send_message(
                 chat_id,
                 SandboxSendMessageRequest(
-                    text=bubble.text,
+                    text=staged_message.text,
                     direction="inbound",
                     sender_handle=settings.agent_sender_handle,
                 ),
             )
             message_ids.append(response.message.id)
-            bubble_texts.append(bubble.text)
+            message_texts.append(staged_message.text)
             yield _event(
                 "message.persisted",
                 run_id,
                 chat_id=chat_id,
-                bubble_id=bubble_id,
                 message_id=response.message.id,
                 text=response.message.text,
                 payload=response.message.model_dump(mode="json"),
@@ -290,7 +262,7 @@ async def stream_response_events(
             payload={
                 "status": "replied",
                 "message_ids": message_ids,
-                "bubbles": bubble_texts,
+                "messages": message_texts,
             },
         )
     except SandboxClientError as exc:
@@ -309,7 +281,7 @@ async def respond_to_chat(request: AgentRespondRequest) -> AgentRespondResponse:
     chat_id: str | None = request.chat_id
     last_reason: str | None = None
     message_ids: list[str] = []
-    bubbles: list[str] = []
+    messages: list[str] = []
     status = "skipped"
 
     async for event in stream_response_events(request):
@@ -320,14 +292,14 @@ async def respond_to_chat(request: AgentRespondRequest) -> AgentRespondResponse:
             if event.message_id:
                 message_ids.append(event.message_id)
             if event.text:
-                bubbles.append(event.text)
+                messages.append(event.text)
             status = "replied"
         elif event.type == "run.completed":
             last_reason = event.reason
             if event.payload:
                 status = event.payload.get("status", status)
                 message_ids = event.payload.get("message_ids", message_ids)
-                bubbles = event.payload.get("bubbles", bubbles)
+                messages = event.payload.get("messages", messages)
         elif event.type == "error":
             status_code = 500
             if event.payload and isinstance(event.payload.get("status_code"), int):
@@ -337,7 +309,7 @@ async def respond_to_chat(request: AgentRespondRequest) -> AgentRespondResponse:
     return AgentRespondResponse(
         chat_id=chat_id or "",
         status=status,
-        bubbles=bubbles,
+        messages=messages,
         message_ids=message_ids,
         reason=last_reason,
     )

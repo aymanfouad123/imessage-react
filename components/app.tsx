@@ -26,8 +26,6 @@ type AgentStreamEventType =
   | "message.persisted"
   | "message.delivered"
   | "message.read"
-  | "reaction.added"
-  | "reaction.removed"
   | "task.started"
   | "task.update"
   | "task.completed"
@@ -38,7 +36,6 @@ type AgentStreamEvent = {
   type: AgentStreamEventType;
   run_id: string;
   chat_id?: string;
-  bubble_id?: string;
   message_id?: string;
   text?: string;
   error?: string;

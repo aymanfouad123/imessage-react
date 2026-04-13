@@ -10,8 +10,6 @@ AgentStreamEventType = Literal[
     "message.persisted",
     "message.delivered",
     "message.read",
-    "reaction.added",
-    "reaction.removed",
     "task.started",
     "task.update",
     "task.completed",
@@ -29,18 +27,21 @@ class AgentRespondRequest(BaseModel):
 
 
 class AgentRespondResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     chat_id: str
     status: Literal["replied", "skipped"] = "replied"
-    bubbles: list[str]
+    messages: list[str]
     message_ids: list[str]
     reason: str | None = None
 
 
 class AgentStreamEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     type: AgentStreamEventType
     run_id: str
     chat_id: str | None = None
-    bubble_id: str | None = None
     message_id: str | None = None
     text: str | None = None
     task_id: str | None = None
@@ -59,13 +60,13 @@ class ReasonerOutput(BaseModel):
     tool_intent: str | None = None
 
 
-class FormattedBubble(BaseModel):
+class FormattedMessage(BaseModel):
     text: str = Field(min_length=1)
     send_after_ms: int | None = None
 
 
 class FormatterOutput(BaseModel):
-    bubbles: list[FormattedBubble] = Field(min_length=1, max_length=10)
+    messages: list[FormattedMessage] = Field(min_length=1, max_length=10)
 
 
 class MemoryMessage(BaseModel):
@@ -136,11 +137,6 @@ class SandboxMessagesResponse(BaseModel):
 class SandboxSendMessageResponse(BaseModel):
     chat: SandboxChat
     message: SandboxMessage
-
-
-class SandboxReadChatResponse(BaseModel):
-    chat: SandboxChat
-    messages: list[SandboxMessage]
 
 
 class SandboxErrorResponse(BaseModel):
