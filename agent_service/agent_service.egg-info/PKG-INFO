@@ -34,6 +34,16 @@ Runtime event types:
 - `run.completed`
 - `error`
 
+`run.completed` is the terminal event for the current SSE invocation only. It
+does not mean the user's external task is complete. Its `payload.status` is the
+semantic outcome of the run:
+
+- `message_sent`: Pepper sent a normal reply, but no external task completion was detected.
+- `task_completed`: a real external tool action completed successfully.
+- `in_progress`: Pepper identified a tool need without completing the external action.
+- `failed`: the run or tool action failed.
+- `skipped`: the run intentionally did not send a message.
+
 `message.persisted` is the UI insertion point. It carries `message_id`, `text`,
 and the persisted sandbox message in `payload`. Formatter chunks are sent as
 separate messages; the frontend should append complete messages and must not
@@ -49,7 +59,7 @@ not reserve or identify a future message.
 ```json
 {
   "chat_id": "chat-id",
-  "status": "replied",
+  "status": "task_completed",
   "messages": ["first staged send", "second staged send"],
   "message_ids": ["message-id-1", "message-id-2"],
   "reason": null
@@ -57,7 +67,10 @@ not reserve or identify a future message.
 ```
 
 Skipped runs return `status: "skipped"`, empty `messages` and `message_ids`,
-and a `reason` when available.
+and a `reason` when available. Auth and clarification flows are represented by
+the persisted message text, `reason`, and `tool_summary` metadata, not special
+top-level statuses. A run that sent a reply without completing an external task
+returns `message_sent` or `in_progress`, not `task_completed`.
 
 ## Reply Decision
 

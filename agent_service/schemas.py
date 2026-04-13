@@ -5,6 +5,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 MessageDirection = Literal["inbound", "outbound"]
 MemorySenderType = Literal["user", "agent"]
+AgentRunStatus = Literal[
+    "message_sent",
+    "task_completed",
+    "in_progress",
+    "failed",
+    "skipped",
+]
 AgentStreamEventType = Literal[
     "typing.started",
     "message.persisted",
@@ -30,7 +37,7 @@ class AgentRespondResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     chat_id: str
-    status: Literal["replied", "skipped"] = "replied"
+    status: AgentRunStatus = "message_sent"
     messages: list[str]
     message_ids: list[str]
     reason: str | None = None
@@ -58,6 +65,19 @@ class ReasonerOutput(BaseModel):
     reason: str | None = None
     needs_tool: bool = False
     tool_intent: str | None = None
+
+
+class ToolRunSummary(BaseModel):
+    tool_call_count: int = 0
+    tool_output_count: int = 0
+    real_tool_action_completed: bool = False
+    auth_requested: bool = False
+    failed: bool = False
+
+
+class ReasonerRunResult(BaseModel):
+    output: ReasonerOutput
+    tool_summary: ToolRunSummary = Field(default_factory=ToolRunSummary)
 
 
 class FormattedMessage(BaseModel):
