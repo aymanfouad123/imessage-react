@@ -1,64 +1,47 @@
 # Agent Service
 
-FastAPI service that drives the local iMessage-style agent experience.
+FastAPI **agent runtime** (reasoning + formatting). It does **not** own persistence or browser realtime. Next.js is the carrier: it stores chat state, serves the UI, and accepts webhooks from this service.
 
-## Runtime Stream
+## Start a run
 
-`POST /agent/respond/stream` returns server-sent events. SSE is used for
-runtime progress and staged sends, not token-by-token rendering.
-
-Runtime event types:
-
-- `typing.started`
-- `message.persisted`
-- `message.delivered`
-- `message.read`
-- `task.started`
-- `task.update`
-- `task.completed`
-- `run.completed`
-- `error`
-
-`run.completed` is the terminal event for the current SSE invocation only. It
-does not mean the user's external task is complete. Its `payload.status` is the
-semantic outcome of the run:
-
-- `message_sent`: Pepper sent a normal reply, but no external task completion was detected.
-- `task_completed`: a real external tool action completed successfully.
-- `in_progress`: Pepper identified a tool need without completing the external action.
-- `failed`: the run or tool action failed.
-- `skipped`: the run intentionally did not send a message.
-
-`message.persisted` is the UI insertion point. It carries `message_id`, `text`,
-and the persisted sandbox message in `payload`. Formatter chunks are sent as
-separate messages; the frontend should append complete messages and must not
-grow an existing message from partial text instructions.
-
-`typing.started` indicates the agent is preparing the next staged send. It does
-not reserve or identify a future message.
-
-## Non-Streaming Response
-
-`POST /agent/respond` returns:
+`POST /agent/runs` — body:
 
 ```json
 {
-  "chat_id": "chat-id",
-  "status": "task_completed",
-  "messages": ["first staged send", "second staged send"],
-  "message_ids": ["message-id-1", "message-id-2"],
-  "reason": null
+  "run_id": "uuid-from-next",
+  "chat_id": "thread-id",
+  "trigger": { "reason": "user_message", "message_id": "last-user-message-id" },
+  "context": {
+    "recent_messages": [/* Sandbox-shaped messages, snake_case */],
+    "agent_handle": "Pepper"
+  }
 }
 ```
 
-Skipped runs return `status: "skipped"`, empty `messages` and `message_ids`,
-and a `reason` when available. Auth and clarification flows are represented by
-the persisted message text, `reason`, and `tool_summary` metadata, not special
-top-level statuses. A run that sent a reply without completing an external task
-returns `message_sent` or `in_progress`, not `task_completed`.
+Returns `202` with `{ "run_id": "..." }`. Work continues in a background task.
 
-## Reply Decision
+## Callbacks to Next
 
-The orchestrator decides from recent thread memory, the latest user message,
-and whether the agent has already replied to that user turn. Read receipts and
-delivery realism belong to the sandbox layer, not the Python reply gate.
+All traffic goes to Next (never to public `/api/chats/*`):
+
+- `POST {NEXT_INTERNAL_BASE_URL}/api/internal/agent/events`
+- Header: `Authorization: Bearer {INTERNAL_AGENT_SECRET}`
+
+Event shapes (JSON):
+
+- `{ "kind": "typing.started", "run_id", "chat_id" }`
+- `{ "kind": "typing.stopped", "run_id", "chat_id" }`
+- `{ "kind": "agent.message", "run_id", "chat_id", "text", "sender_handle" }`
+
+Next persists the message in its in-memory store and pushes realtime events to the browser. The runtime uses the `recent_messages` snapshot supplied in `/agent/runs`; it does not re-fetch chat context from Next before sending.
+
+## Run
+
+From this directory:
+
+```bash
+uv sync
+uv run uvicorn agent_service.main:app --reload --port 8000
+```
+
+Configure `NEXT_INTERNAL_BASE_URL`, `INTERNAL_AGENT_SECRET`, and model keys in `.env` as needed.

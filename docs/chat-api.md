@@ -21,16 +21,29 @@ Use this as a system architecture and API contract reference: what exists, what 
 ## Source Files
 
 - Backend models and DTOs: `lib/server/models.ts`
-- In-memory backend store: `lib/server/store.ts`
-- API route handlers: `app/api/chats/**/route.ts`
+- In-memory sandbox store: `lib/server/store.ts`
+- WebSocket hub + broadcast: `lib/server/ws-hub.ts`, `types/realtime.ts`
+- Browser WebSocket client: `lib/client/realtime.ts`
+- Custom Node entry (Next + `/ws`): `server.ts`
+- Public API route handlers: `app/api/chats/**/route.ts`
+- Internal agent API: `app/api/internal/agent/events/route.ts`, `lib/server/agent-runtime.ts`
 - Frontend API-to-UI adapter: `lib/chat-adapters.ts`
 - Main frontend chat state: `components/app.tsx`
 - Existing UI-only types: `types/index.ts`
 - Seed chat data: `data/initial-conversations.ts`
+- Swappable agent runtime (Python): `agent_service/` (FastAPI `POST /agent/runs`, webhooks to Next)
 
 ## Architecture Overview
 
-The app runs a small in-memory backend inside the Next.js App Router. The frontend talks to the same app through `/api/chats` routes and adapts backend models into the existing iMessage-style UI types.
+The browser talks **only** to Next.js: HTTP for chat actions (`/api/chats/*`), WebSocket (`/ws`) for realtime `BrowserEvent` updates. It does not call the Python service or any messaging provider directly.
+
+Next.js is the **carrier** and source of truth for app state and persistence (in-memory `lib/server/store.ts`). Route handlers call `store` functions directly and return `404` when a `chatId` is missing. Chat mutations call `broadcast()` from the WebSocket hub so all connected clients receive `BrowserEvent` updates.
+
+**Realtime:** `message.created` includes the updated `chat` snapshot, so the UI does not need a separate `chat.updated` for sends. `chat.updated` is only broadcast from `POST /api/chats/:chatId/read` (no new message).
+
+The **agent runtime** (Python FastAPI): Next starts a run with `POST {AGENT_RUNTIME_URL}/agent/runs`. The agent posts back to `POST /api/internal/agent/events` (Bearer `INTERNAL_AGENT_SECRET`) with optional `typing.*` events and one `agent.message` event. The handler writes via the store and `broadcast`s the same message event shape as user-initiated actions.
+
+Local dev runs the custom server (`pnpm dev` → `tsx server.ts`) so HTTP and `/ws` share one port.
 
 The backend model layer is intentionally small:
 
@@ -71,6 +84,7 @@ export interface Chat {
   created_at: string;
   updated_at: string;
   unread_count?: number;
+  is_agent_chat?: boolean;
 }
 
 export interface Message {
@@ -187,6 +201,11 @@ export interface CreateChatResponse {
 export interface SendMessageResponse {
   chat: Chat;
   message: Message;
+  agent_run?: {
+    run_id: string;
+    ok: boolean;
+    error?: string;
+  };
 }
 
 export interface ReadChatResponse {
@@ -371,8 +390,10 @@ The frontend uses existing UI types from `types/index.ts`, but backend API data 
 Existing chat:
 
 1. Submit `SendMessageRequest` to `POST /api/chats/:chatId/messages`.
-2. Reload the selected chat/messages.
+2. Merge the response into local UI state (and/or apply matching `message.created` from `/ws`; `chat.updated` only applies after mark-read).
 3. Clear the local draft for that chat id.
+
+For `is_agent_chat: true` threads, Next also triggers the agent runtime. The send response includes `agent_run`; if `ok` is false, the UI can show the startup error. Inbound agent messages arrive via the same WS events after the agent posts `agent.message` to the internal webhook.
 
 New chat:
 
@@ -515,7 +536,7 @@ Behavior:
 - `listChats()` returns chats sorted by `updated_at` descending.
 - `getMessages(chatId)` returns messages sorted by `created_at` ascending.
 - `createChat(request)` creates a chat, participant handles, and the first message.
-- `sendMessage(chatId, text)` creates a local-user message and updates parent chat activity.
+- `sendMessage(chatId, { text, as_me, from_handle? })` creates a message and updates parent chat activity (public `/api/chats/:chatId/messages` only sends `as_me: true` user messages; the internal agent webhook sends agent messages with `as_me: false`).
 - `markChatRead(chatId)` sets unread count to zero and marks received messages read.
 
 ## Implementation Notes
