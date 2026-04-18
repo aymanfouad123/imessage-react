@@ -40,10 +40,9 @@ export interface CreateChatRequest {
   display_name?: string;
 }
 
+/** Public API: outbound (user) messages only */
 export interface SendMessageRequest {
   text: string;
-  direction?: "inbound" | "outbound";
-  sender_handle?: string;
 }
 
 export interface ListChatsResponse {
@@ -66,6 +65,11 @@ export interface CreateChatResponse {
 export interface SendMessageResponse {
   chat: Chat;
   message: Message;
+  agent_run?: {
+    run_id: string;
+    ok: boolean;
+    error?: string;
+  };
 }
 
 export interface ReadChatResponse {

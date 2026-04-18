@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createChat, listChats } from "@/lib/server/store";
+import { broadcast } from "@/lib/server/ws-hub";
+import * as store from "@/lib/server/store";
 import type {
   CreateChatRequest,
   CreateChatResponse,
@@ -42,8 +43,14 @@ const parseCreateChatRequest = (body: unknown): CreateChatRequest | string => {
 };
 
 export async function GET() {
-  const response: ListChatsResponse = { chats: listChats() };
-  return NextResponse.json(response);
+  try {
+    const chats = store.listChats();
+    const response: ListChatsResponse = { chats };
+    return NextResponse.json(response);
+  } catch (e) {
+    console.error("list chats failed", e);
+    return NextResponse.json({ error: "handler failed" }, { status: 500 });
+  }
 }
 
 export async function POST(request: Request) {
@@ -63,6 +70,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed }, { status: 400 });
   }
 
-  const response: CreateChatResponse = createChat(parsed);
-  return NextResponse.json(response, { status: 201 });
+  try {
+    const response: CreateChatResponse = store.createChat(parsed);
+    broadcast({
+      kind: "message.created",
+      chat_id: response.chat.id,
+      chat: response.chat,
+      message: response.message,
+      event_id: response.message.id,
+    });
+    return NextResponse.json(response, { status: 201 });
+  } catch (e) {
+    console.error("create chat failed", e);
+    return NextResponse.json({ error: "handler failed" }, { status: 500 });
+  }
 }

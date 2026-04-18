@@ -6,8 +6,13 @@ import type {
   CreateChatRequest,
   Message,
   MessageService,
-  SendMessageRequest,
 } from "./models";
+
+export interface SendMessageInput {
+  text: string;
+  as_me: boolean;
+  from_handle?: string;
+}
 
 const chats = new Map<string, Chat>();
 const messagesByChat = new Map<string, Message[]>();
@@ -128,19 +133,18 @@ export const createChat = (request: CreateChatRequest) => {
   return { chat, message };
 };
 
-export const sendMessage = (chatId: string, request: SendMessageRequest) => {
+export const sendMessage = (chatId: string, input: SendMessageInput) => {
   const chat = chats.get(chatId);
   if (!chat) return null;
 
   const timestamp = nowIso();
-  const direction = request.direction ?? "outbound";
-  const isFromMe = direction === "outbound";
+  const isFromMe = input.as_me;
   const message: Message = {
     id: uuidv4(),
     chat_id: chatId,
-    from_handle: isFromMe ? undefined : request.sender_handle,
+    from_handle: isFromMe ? undefined : input.from_handle,
     is_from_me: isFromMe,
-    text: request.text,
+    text: input.text,
     created_at: timestamp,
     sent_at: timestamp,
     delivered_at: isFromMe ? timestamp : null,
