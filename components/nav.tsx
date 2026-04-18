@@ -1,5 +1,5 @@
 import { Icons } from "./icons";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "next-themes";
 
@@ -10,8 +10,14 @@ interface NavProps {
 }
 
 export function Nav({ onNewChat, isMobileView, isScrolled }: NavProps) {
+  const [mounted, setMounted] = useState(false);
   const { theme, systemTheme, setTheme } = useTheme();
   const effectiveTheme = theme === "system" ? systemTheme : theme;
+  const themeForToggle = mounted ? effectiveTheme : "light";
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Keyboard shortcut for creating a new chat
   useEffect(() => {
@@ -66,11 +72,11 @@ export function Nav({ onNewChat, isMobileView, isScrolled }: NavProps) {
               "p-2 rounded-lg text-muted-foreground/70 hover:text-foreground hover:bg-muted-foreground/10 transition-colors",
               isMobileView && "p-2"
             )}
-            onClick={() => setTheme(effectiveTheme === "dark" ? "light" : "dark")}
+            onClick={() => setTheme(themeForToggle === "dark" ? "light" : "dark")}
             aria-label="Toggle dark mode"
             title="Toggle dark mode (t)"
           >
-            {effectiveTheme === "dark" ? (
+            {themeForToggle === "dark" ? (
               <Icons.sun className="h-4 w-4" />
             ) : (
               <Icons.moon className="h-4 w-4" />

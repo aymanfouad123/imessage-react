@@ -121,7 +121,7 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
-  const [soundEnabled, setSoundEnabled] = useState(soundEffects.isEnabled());
+  const [soundEnabled, setSoundEnabled] = useState(true);
   const [isLoadingChats, setIsLoadingChats] = useState(true);
   const [agentTypingConversationId, setAgentTypingConversationId] = useState<
     string | null
