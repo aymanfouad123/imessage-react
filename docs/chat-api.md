@@ -39,7 +39,7 @@ The browser talks **only** to Next.js: HTTP for chat actions (`/api/chats/*`), W
 
 Next.js is the **carrier** and source of truth for app state and persistence (in-memory `lib/server/store.ts`). Route handlers call `store` functions directly and return `404` when a `chatId` is missing. Chat mutations call `broadcast()` from the WebSocket hub so all connected clients receive `BrowserEvent` updates.
 
-**Realtime:** `message.created` includes the updated `chat` snapshot, so the UI does not need a separate `chat.updated` for sends. `chat.updated` is only broadcast from `POST /api/chats/:chatId/read` (no new message).
+**Realtime:** `message.created` includes the updated `chat` snapshot and the single new `message`, so the UI does not need a separate `chat.updated` or a full-history fetch for sends. `chat.updated` is only broadcast from `POST /api/chats/:chatId/read` for metadata-only updates (no new message).
 
 The **agent runtime** (Python FastAPI): Next starts a run with `POST {AGENT_RUNTIME_URL}/agent/runs`. The agent posts back to `POST /api/internal/agent/events` (Bearer `INTERNAL_AGENT_SECRET`) with optional `typing.*` events and one `agent.message` event. The handler writes via the store and `broadcast`s the same message event shape as user-initiated actions.
 
@@ -201,11 +201,6 @@ export interface CreateChatResponse {
 export interface SendMessageResponse {
   chat: Chat;
   message: Message;
-  agent_run?: {
-    run_id: string;
-    ok: boolean;
-    error?: string;
-  };
 }
 
 export interface ReadChatResponse {
@@ -242,7 +237,7 @@ Response:
 Contract:
 
 - Sort by `updated_at` descending.
-- The frontend hydrates each returned chat by calling `GET /api/chats/:chatId/messages`.
+- The frontend uses this as the metadata list, then eagerly fetches message history for each returned chat.
 
 ### POST `/api/chats`
 
@@ -372,28 +367,27 @@ The frontend uses existing UI types from `types/index.ts`, but backend API data 
 2. `isLoadingChats` shows loading skeletons while data loads.
 3. The app calls `GET /api/chats`.
 4. For each returned chat, the app calls `GET /api/chats/:chatId/messages`.
-5. `lib/chat-adapters.ts` converts backend models into UI `Conversation` objects.
+5. `lib/chat-adapters.ts` converts backend chats and messages into populated UI `Conversation` objects.
 6. Desktop layout selects the first chat automatically.
-7. Mobile layout starts with no selected chat.
+7. Mobile layout starts with no selected chat unless `?id=` is present.
 
 ### Selecting A Chat
 
 1. `activeConversation` is set to the selected `Chat.id`.
 2. Browser URL becomes `/?id=:chatId`.
-3. The app calls `GET /api/chats/:chatId`.
-4. The app calls `GET /api/chats/:chatId/messages`.
-5. The app calls `POST /api/chats/:chatId/read`.
-6. The returned chat/messages replace the current UI view model for that chat.
+3. The already-loaded messages render from local UI state.
+4. The app calls `POST /api/chats/:chatId/read`.
+5. The returned chat/messages replace the current UI view model for that chat.
 
 ### Sending A Message
 
 Existing chat:
 
 1. Submit `SendMessageRequest` to `POST /api/chats/:chatId/messages`.
-2. Merge the response into local UI state (and/or apply matching `message.created` from `/ws`; `chat.updated` only applies after mark-read).
+2. Merge the response into local UI state. Apply any matching `message.created` from `/ws` idempotently by message id.
 3. Clear the local draft for that chat id.
 
-For `is_agent_chat: true` threads, Next also triggers the agent runtime. The send response includes `agent_run`; if `ok` is false, the UI can show the startup error. Inbound agent messages arrive via the same WS events after the agent posts `agent.message` to the internal webhook.
+For `is_agent_chat: true` threads, Next also triggers the agent runtime. Runtime startup status is server-side debug/logging only; the browser response remains `{ chat, message }`. Inbound agent messages arrive via the same WS events after the agent posts `agent.message` to the internal webhook.
 
 New chat:
 
