@@ -4,8 +4,9 @@ import { CommandMenu } from "./command-menu";
 import { Nav } from "./nav";
 import { Sidebar } from "./sidebar";
 import { useToast } from "@/hooks/use-toast";
+import { connectRealtime } from "@/lib/client/realtime";
 import { soundEffects } from "@/lib/sound-effects";
-import { toUiConversation } from "@/lib/chat-adapters";
+import { toUiConversation, toUiMessage } from "@/lib/chat-adapters";
 import type {
   Chat,
   CreateChatRequest,
@@ -16,54 +17,8 @@ import type {
   ReadChatResponse,
   SendMessageResponse,
 } from "@/lib/server/models";
+import type { BrowserEvent } from "@/types/realtime";
 import type { Conversation, Message } from "@/types";
-
-const AGENT_SERVICE_URL =
-  process.env.NEXT_PUBLIC_AGENT_SERVICE_URL ?? "http://localhost:8000";
-const INITIAL_AGENT_GREETING = "hey! hows it going?";
-const INITIAL_AGENT_GREETING_DELAY_MS = 3000;
-
-type AgentStreamEventType =
-  | "typing.started"
-  | "message.persisted"
-  | "message.delivered"
-  | "message.read"
-  | "task.started"
-  | "task.update"
-  | "task.completed"
-  | "run.completed"
-  | "error";
-
-type AgentRunStatus =
-  | "message_sent"
-  | "task_completed"
-  | "in_progress"
-  | "failed"
-  | "skipped";
-
-type AgentRunCompletedPayload = {
-  status: AgentRunStatus;
-  message_ids: string[];
-  messages: string[];
-  tool_summary?: Record<string, unknown>;
-};
-
-type AgentStreamEvent = {
-  type: AgentStreamEventType;
-  run_id: string;
-  chat_id?: string;
-  message_id?: string;
-  text?: string;
-  error?: string;
-  reason?: string;
-  created_at: string;
-  payload?: Record<string, unknown> | AgentRunCompletedPayload;
-};
-
-type AgentRunState = {
-  running: boolean;
-  pending: boolean;
-};
 
 const messageStatusRank: Record<NonNullable<Message["status"]>, number> = {
   delivered: 1,
@@ -147,91 +102,6 @@ const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   return response.json() as Promise<T>;
 };
 
-const parseSseBlock = (block: string): AgentStreamEvent | null => {
-  const lines = block.split(/\r?\n/);
-  const dataLines = lines
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trimStart());
-
-  if (dataLines.length === 0) return null;
-
-  try {
-    return JSON.parse(dataLines.join("\n")) as AgentStreamEvent;
-  } catch {
-    return null;
-  }
-};
-
-const streamAgentResponse = async (
-  conversationId: string,
-  onEvent: (event: AgentStreamEvent) => Promise<void> | void
-) => {
-  const response = await fetch(`${AGENT_SERVICE_URL}/agent/respond/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: conversationId }),
-  });
-
-  if (!response.ok || !response.body) {
-    const error = (await response.json().catch(() => null)) as
-      | { detail?: string; error?: string }
-      | null;
-    throw new Error(error?.detail ?? error?.error ?? "Agent response failed");
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const blocks = buffer.split(/\r?\n\r?\n/);
-    buffer = blocks.pop() ?? "";
-
-    for (const block of blocks) {
-      const event = parseSseBlock(block);
-      if (event) await onEvent(event);
-    }
-  }
-
-  buffer += decoder.decode();
-  const trailingEvent = parseSseBlock(buffer);
-  if (trailingEvent) await onEvent(trailingEvent);
-};
-
-function messageFromAgentPersistedEvent(
-  event: AgentStreamEvent,
-  conversation: Conversation
-): Message | null {
-  if (!event.message_id || event.text == null) return null;
-  const payload = event.payload as {
-    from_handle?: string;
-    created_at?: string;
-    is_from_me?: boolean;
-    is_delivered?: boolean;
-    is_read?: boolean;
-  } | null;
-  const isFromMe = payload?.is_from_me === true;
-  const status = isFromMe
-    ? payload?.is_read
-      ? "read"
-      : payload?.is_delivered
-        ? "delivered"
-        : undefined
-    : undefined;
-  const fallbackHandle = conversation.recipients[0]?.name ?? "Agent";
-  return {
-    id: event.message_id,
-    content: event.text,
-    sender: isFromMe ? "me" : (payload?.from_handle ?? fallbackHandle),
-    timestamp: payload?.created_at ?? new Date().toISOString(),
-    status,
-  };
-}
-
 export default function App() {
   const { toast } = useToast();
   const [isNewConversation, setIsNewConversation] = useState(false);
@@ -258,8 +128,11 @@ export default function App() {
   >(null);
 
   const commandMenuRef = useRef<{ setOpen: (open: boolean) => void }>(null);
-  const agentRunsByChatRef = useRef<Record<string, AgentRunState>>({});
-  const initialAgentGreetingChatIdRef = useRef<string | null>(null);
+  const loadOneChatRef = useRef<
+    ((conversationId: string) => Promise<Conversation>) | null
+  >(null);
+  const loadChatsRef = useRef<(() => Promise<Conversation[]>) | null>(null);
+  const activeConversationRef = useRef<string | null>(null);
   const typingConversation = agentTypingConversationId
     ? conversations.find((conversation) => conversation.id === agentTypingConversationId)
     : null;
@@ -280,37 +153,6 @@ export default function App() {
     );
     return toUiConversation({ chat, messages });
   }, []);
-
-  const markMessageStatusLocally = useCallback(
-    (
-      conversationId: string,
-      messageId: string,
-      status: NonNullable<Message["status"]>
-    ) => {
-      setConversations((prev) =>
-        prev.map((conversation) => {
-          if (conversation.id !== conversationId) return conversation;
-
-          let didChange = false;
-          const nextConversation = {
-            ...conversation,
-            messages: conversation.messages.map((message) => {
-              if (message.id !== messageId || message.sender !== "me") {
-                return message;
-              }
-
-              const nextStatus = mergeMessageStatus(message.status, status);
-              if (nextStatus === message.status) return message;
-              didChange = true;
-              return { ...message, status: nextStatus };
-            }),
-          };
-          return didChange ? nextConversation : conversation;
-        })
-      );
-    },
-    []
-  );
 
   const markLatestUserMessageReadLocally = useCallback(
     (conversationId: string) => {
@@ -342,12 +184,6 @@ export default function App() {
     },
     []
   );
-
-  const clearStreamState = useCallback((conversationId: string) => {
-    setAgentTypingConversationId((current) =>
-      current === conversationId ? null : current
-    );
-  }, []);
 
   const loadChats = useCallback(async () => {
     const { chats } = await fetchJson<ListChatsResponse>("/api/chats");
@@ -399,108 +235,87 @@ export default function App() {
     );
   }, []);
 
-  const handleAgentStreamEvent = useCallback(
-    async (conversationId: string, event: AgentStreamEvent) => {
-      if (event.type === "typing.started") {
-        setAgentTypingConversationId(conversationId);
-        markLatestUserMessageReadLocally(conversationId);
-        return;
-      }
-
-      if (event.type === "message.persisted") {
-        clearStreamState(conversationId);
-        setConversations((prev) =>
-          prev.map((conversation) => {
-            if (conversation.id !== conversationId) return conversation;
-            const message = messageFromAgentPersistedEvent(event, conversation);
-            if (
-              !message ||
-              conversation.messages.some((item) => item.id === message.id)
-            ) {
-              return conversation;
-            }
-            return {
-              ...conversation,
-              messages: [...conversation.messages, message],
-            };
-          })
-        );
-        return;
-      }
-
-      if (event.type === "message.delivered" && event.message_id) {
-        markMessageStatusLocally(conversationId, event.message_id, "delivered");
-        return;
-      }
-
-      if (event.type === "message.read" && event.message_id) {
-        markMessageStatusLocally(conversationId, event.message_id, "read");
-        return;
-      }
-
-      if (event.type === "run.completed") {
-        clearStreamState(conversationId);
-        await loadOneChat(conversationId);
-        return;
-      }
-
-      if (event.type === "error") {
-        console.error("Agent stream event error:", event.error);
-        toast({ description: "Agent response failed" });
-        return;
-      }
-    },
-    [
-      clearStreamState,
-      loadOneChat,
-      markLatestUserMessageReadLocally,
-      markMessageStatusLocally,
-      toast,
-    ]
-  );
-
-  const startAgentResponse = useCallback(
-    (conversationId: string) => {
-      const state =
-        agentRunsByChatRef.current[conversationId] ??
-        (agentRunsByChatRef.current[conversationId] = {
-          running: false,
-          pending: false,
-        });
-
-      if (state.running) {
-        state.pending = true;
-        return;
-      }
-
-      state.running = true;
-
-      const run = async () => {
-        try {
-          await streamAgentResponse(conversationId, (event) =>
-            handleAgentStreamEvent(conversationId, event)
+  const handleBrowserEvent = useCallback(
+    (event: BrowserEvent) => {
+      if (event.kind === "typing") {
+        if (event.state === "started") {
+          setAgentTypingConversationId(event.chat_id);
+          markLatestUserMessageReadLocally(event.chat_id);
+        } else {
+          setAgentTypingConversationId((current) =>
+            current === event.chat_id ? null : current
           );
-        } catch (error) {
-          console.error("Error triggering agent response:", error);
-          toast({ description: "Agent response failed" });
-        } finally {
-          const latestState = agentRunsByChatRef.current[conversationId];
-          if (!latestState) return;
-
-          latestState.running = false;
-          clearStreamState(conversationId);
-
-          if (latestState.pending) {
-            latestState.pending = false;
-            startAgentResponse(conversationId);
-          }
         }
-      };
+        return;
+      }
 
-      void run();
+      if (event.kind === "message.created") {
+        setConversations((prev) => {
+          const exists = prev.some((c) => c.id === event.chat_id);
+          if (!exists) {
+            void loadOneChatRef.current?.(event.chat_id);
+            return prev;
+          }
+          return prev.map((conv) => {
+            if (conv.id !== event.chat_id) return conv;
+            const uiMsg = toUiMessage(event.message, event.chat);
+            const has = conv.messages.some((m) => m.id === uiMsg.id);
+            return {
+              ...conv,
+              name: event.chat.display_name,
+              messages: has
+                ? mergeMessages(conv.messages, [uiMsg])
+                : [...conv.messages, uiMsg],
+              lastMessageTime: event.chat.updated_at,
+              unreadCount: event.chat.unread_count ?? 0,
+            };
+          });
+        });
+        return;
+      }
+
+      if (event.kind === "chat.updated") {
+        setConversations((prev) =>
+          prev.map((conv) =>
+            conv.id === event.chat_id
+              ? {
+                  ...conv,
+                  name: event.chat.display_name,
+                  lastMessageTime: event.chat.updated_at,
+                  unreadCount: event.chat.unread_count ?? 0,
+                }
+              : conv
+          )
+        );
+      }
     },
-    [clearStreamState, handleAgentStreamEvent, toast]
+    [markLatestUserMessageReadLocally]
   );
+
+  useEffect(() => {
+    loadOneChatRef.current = loadOneChat;
+  }, [loadOneChat]);
+
+  useEffect(() => {
+    loadChatsRef.current = loadChats;
+  }, [loadChats]);
+
+  useEffect(() => {
+    activeConversationRef.current = activeConversation;
+  }, [activeConversation]);
+
+  const handleRealtimeOpen = useCallback(async () => {
+    setAgentTypingConversationId(null);
+    await loadChatsRef.current?.();
+    const active = activeConversationRef.current;
+    if (active) {
+      await loadOneChatRef.current?.(active);
+    }
+  }, []);
+
+  useEffect(() => {
+    return connectRealtime(handleBrowserEvent, { onOpen: handleRealtimeOpen });
+  }, [handleBrowserEvent, handleRealtimeOpen]);
 
   const selectConversation = useCallback(
     (conversationId: string | null) => {
@@ -587,52 +402,6 @@ export default function App() {
   }, [activeConversation]);
 
   useEffect(() => {
-    if (isLoadingChats) return;
-
-    const agentConversation = conversations.find(
-      (conversation) => conversation.isAgentChat
-    );
-
-    if (!agentConversation || agentConversation.messages.length > 0) return;
-    if (initialAgentGreetingChatIdRef.current) return;
-
-    initialAgentGreetingChatIdRef.current = agentConversation.id;
-
-    const timeoutId = window.setTimeout(async () => {
-      try {
-        const { messages } = await fetchJson<MessagesResponse>(
-          `/api/chats/${agentConversation.id}/messages`
-        );
-
-        if (messages.length > 0) return;
-
-        await fetchJson<SendMessageResponse>(
-          `/api/chats/${agentConversation.id}/messages`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              text: INITIAL_AGENT_GREETING,
-              direction: "inbound",
-              sender_handle: agentConversation.recipients[0]?.name ?? "Pepper",
-            }),
-          }
-        );
-        await loadOneChat(agentConversation.id);
-      } catch (error) {
-        initialAgentGreetingChatIdRef.current = null;
-        console.error("Error sending initial agent greeting:", error);
-      }
-    }, INITIAL_AGENT_GREETING_DELAY_MS);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-      if (initialAgentGreetingChatIdRef.current === agentConversation.id) {
-        initialAgentGreetingChatIdRef.current = null;
-      }
-    };
-  }, [conversations, isLoadingChats, loadOneChat]);
-
-  useEffect(() => {
     setSoundEnabled(soundEffects.isEnabled());
   }, []);
 
@@ -701,7 +470,7 @@ export default function App() {
         return;
       }
 
-      const { chat } = await fetchJson<SendMessageResponse>(
+      const response = await fetchJson<SendMessageResponse>(
         `/api/chats/${conversationId}/messages`,
         {
           method: "POST",
@@ -709,14 +478,26 @@ export default function App() {
         }
       );
 
-      await loadOneChat(conversationId);
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.id !== conversationId) return c;
+          const uiMsg = toUiMessage(response.message, response.chat);
+          return {
+            ...c,
+            messages: mergeMessages(c.messages, [uiMsg]),
+            lastMessageTime: response.chat.updated_at,
+            unreadCount: response.chat.unread_count ?? 0,
+          };
+        })
+      );
       setActiveConversation(conversationId);
       setIsNewConversation(false);
       window.history.pushState({}, "", `?id=${conversationId}`);
       clearMessageDraft(conversationId);
-
-      if (chat.is_agent_chat) {
-        startAgentResponse(conversationId);
+      if (response.agent_run && !response.agent_run.ok) {
+        toast({
+          description: `Agent did not start: ${response.agent_run.error ?? "unknown error"}`,
+        });
       }
     } catch (error) {
       console.error("Error sending message:", error);
