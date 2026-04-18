@@ -2,10 +2,7 @@ import { NextResponse } from "next/server";
 import { broadcast } from "@/lib/server/ws-hub";
 import { startAgentRun } from "@/lib/server/agent-runtime";
 import * as store from "@/lib/server/store";
-import type {
-  MessagesResponse,
-  SendMessageResponse,
-} from "@/lib/server/models";
+import type { MessagesResponse, SendMessageResponse } from "@/lib/server/models";
 
 interface RouteContext {
   params: Promise<{ chatId: string }>;
@@ -73,17 +70,31 @@ export async function POST(request: Request, context: RouteContext) {
       message: result.message,
       event_id: result.message.id,
     });
-    let agentRun: SendMessageResponse["agent_run"];
     if (result.chat.is_agent_chat) {
       const recent = store.getMessages(chatId);
-      agentRun = await startAgentRun({
+      void startAgentRun({
         chat_id: chatId,
         user_message_id: result.message.id,
         recent_messages: recent,
         agent_handle: process.env.AGENT_SENDER_HANDLE ?? "Pepper",
-      });
+      })
+        .then((agentRun) => {
+          if (!agentRun.ok) {
+            console.error("agent run did not start", {
+              chat_id: chatId,
+              run_id: agentRun.run_id,
+              error: agentRun.error,
+            });
+          }
+        })
+        .catch((error) => {
+          console.error("agent run startup failed", {
+            chat_id: chatId,
+            error,
+          });
+        });
     }
-    const response: SendMessageResponse = { ...result, agent_run: agentRun };
+    const response: SendMessageResponse = result;
     return NextResponse.json(response, { status: 201 });
   } catch (e) {
     console.error("send message failed", e);

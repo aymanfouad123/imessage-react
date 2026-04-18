@@ -65,11 +65,6 @@ export interface CreateChatResponse {
 export interface SendMessageResponse {
   chat: Chat;
   message: Message;
-  agent_run?: {
-    run_id: string;
-    ok: boolean;
-    error?: string;
-  };
 }
 
 export interface ReadChatResponse {

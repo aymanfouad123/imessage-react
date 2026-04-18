@@ -10,9 +10,9 @@ import { toUiConversation, toUiMessage } from "@/lib/chat-adapters";
 import type {
   Chat,
   CreateChatRequest,
-  ChatResponse,
   CreateChatResponse,
   ListChatsResponse,
+  Message as ApiMessage,
   MessagesResponse,
   ReadChatResponse,
   SendMessageResponse,
@@ -128,11 +128,6 @@ export default function App() {
   >(null);
 
   const commandMenuRef = useRef<{ setOpen: (open: boolean) => void }>(null);
-  const loadOneChatRef = useRef<
-    ((conversationId: string) => Promise<Conversation>) | null
-  >(null);
-  const loadChatsRef = useRef<(() => Promise<Conversation[]>) | null>(null);
-  const activeConversationRef = useRef<string | null>(null);
   const typingConversation = agentTypingConversationId
     ? conversations.find((conversation) => conversation.id === agentTypingConversationId)
     : null;
@@ -147,11 +142,8 @@ export default function App() {
     ? conversations.find((conversation) => conversation.id === activeConversation)
     : undefined;
 
-  const loadChatWithMessages = useCallback(async (chat: Chat) => {
-    const { messages } = await fetchJson<MessagesResponse>(
-      `/api/chats/${chat.id}/messages`
-    );
-    return toUiConversation({ chat, messages });
+  const setActiveConversationId = useCallback((conversationId: string | null) => {
+    setActiveConversation(conversationId);
   }, []);
 
   const markLatestUserMessageReadLocally = useCallback(
@@ -185,41 +177,58 @@ export default function App() {
     []
   );
 
+  const applyCreatedMessage = useCallback(
+    (chat: Chat, message: ApiMessage) => {
+      setConversations((prev) => {
+        const uiMessage = toUiMessage(message, chat);
+        const nextConversation = toUiConversation({
+          chat,
+          messages: [message],
+        });
+        const exists = prev.some((conversation) => conversation.id === chat.id);
+
+        if (!exists) return [nextConversation, ...prev];
+
+        return prev.map((conversation) =>
+          conversation.id === chat.id
+            ? {
+                ...conversation,
+                name: chat.display_name,
+                messages: mergeMessages(conversation.messages, [uiMessage]),
+                lastMessageTime: chat.updated_at,
+                unreadCount: chat.unread_count ?? 0,
+                isAgentChat: chat.is_agent_chat ?? false,
+              }
+            : conversation
+        );
+      });
+    },
+    []
+  );
+
+  const loadChatWithMessages = useCallback(async (chat: Chat) => {
+    const { messages } = await fetchJson<MessagesResponse>(
+      `/api/chats/${chat.id}/messages`
+    );
+    return toUiConversation({ chat, messages });
+  }, []);
+
   const loadChats = useCallback(async () => {
     const { chats } = await fetchJson<ListChatsResponse>("/api/chats");
-    const hydratedConversations = await Promise.all(
+    const loadedConversations = await Promise.all(
       chats.map((chat) => loadChatWithMessages(chat))
     );
 
     setConversations((prev) =>
-      hydratedConversations.map((conversation) =>
+      loadedConversations.map((conversation) =>
         mergeConversation(
           prev.find((item) => item.id === conversation.id),
           conversation
         )
       )
     );
-    return hydratedConversations;
+    return loadedConversations;
   }, [loadChatWithMessages]);
-
-  const loadOneChat = useCallback(async (conversationId: string) => {
-    const [{ chat }, { messages }] = await Promise.all([
-      fetchJson<ChatResponse>(`/api/chats/${conversationId}`),
-      fetchJson<MessagesResponse>(`/api/chats/${conversationId}/messages`),
-    ]);
-    const conversation = toUiConversation({ chat, messages });
-
-    setConversations((prev) => {
-      const exists = prev.some((item) => item.id === conversation.id);
-      if (!exists) return [conversation, ...prev];
-
-      return prev.map((item) =>
-        item.id === conversation.id ? mergeConversation(item, conversation) : item
-      );
-    });
-
-    return conversation;
-  }, []);
 
   const markConversationRead = useCallback(async (conversationId: string) => {
     const { chat, messages } = await fetchJson<ReadChatResponse>(
@@ -250,27 +259,7 @@ export default function App() {
       }
 
       if (event.kind === "message.created") {
-        setConversations((prev) => {
-          const exists = prev.some((c) => c.id === event.chat_id);
-          if (!exists) {
-            void loadOneChatRef.current?.(event.chat_id);
-            return prev;
-          }
-          return prev.map((conv) => {
-            if (conv.id !== event.chat_id) return conv;
-            const uiMsg = toUiMessage(event.message, event.chat);
-            const has = conv.messages.some((m) => m.id === uiMsg.id);
-            return {
-              ...conv,
-              name: event.chat.display_name,
-              messages: has
-                ? mergeMessages(conv.messages, [uiMsg])
-                : [...conv.messages, uiMsg],
-              lastMessageTime: event.chat.updated_at,
-              unreadCount: event.chat.unread_count ?? 0,
-            };
-          });
-        });
+        applyCreatedMessage(event.chat, event.message);
         return;
       }
 
@@ -289,29 +278,17 @@ export default function App() {
         );
       }
     },
-    [markLatestUserMessageReadLocally]
+    [applyCreatedMessage, markLatestUserMessageReadLocally]
   );
 
-  useEffect(() => {
-    loadOneChatRef.current = loadOneChat;
-  }, [loadOneChat]);
-
-  useEffect(() => {
-    loadChatsRef.current = loadChats;
-  }, [loadChats]);
-
-  useEffect(() => {
-    activeConversationRef.current = activeConversation;
-  }, [activeConversation]);
-
-  const handleRealtimeOpen = useCallback(async () => {
-    setAgentTypingConversationId(null);
-    await loadChatsRef.current?.();
-    const active = activeConversationRef.current;
-    if (active) {
-      await loadOneChatRef.current?.(active);
-    }
-  }, []);
+  const handleRealtimeOpen = useCallback(
+    async ({ isReconnect }: { isReconnect: boolean }) => {
+      setAgentTypingConversationId(null);
+      if (!isReconnect) return;
+      await loadChats();
+    },
+    [loadChats]
+  );
 
   useEffect(() => {
     return connectRealtime(handleBrowserEvent, { onOpen: handleRealtimeOpen });
@@ -320,22 +297,20 @@ export default function App() {
   const selectConversation = useCallback(
     (conversationId: string | null) => {
       if (conversationId === null) {
-        setActiveConversation(null);
+        setActiveConversationId(null);
         window.history.pushState({}, "", "/");
         return;
       }
 
-      setActiveConversation(conversationId);
+      setActiveConversationId(conversationId);
       setIsNewConversation(false);
       window.history.pushState({}, "", `?id=${conversationId}`);
 
-      void loadOneChat(conversationId).then(() =>
-        markConversationRead(conversationId).catch((error) => {
-          console.error("Error marking conversation read:", error);
-        })
-      );
+      void markConversationRead(conversationId).catch((error) => {
+        console.error("Error marking conversation read:", error);
+      });
     },
-    [loadOneChat, markConversationRead]
+    [markConversationRead, setActiveConversationId]
   );
 
   useEffect(() => {
@@ -371,18 +346,25 @@ export default function App() {
             (conversation) => conversation.id === urlConversationId
           )
         ) {
-          selectConversation(urlConversationId);
+          setActiveConversationId(urlConversationId);
+          setIsNewConversation(false);
+          window.history.pushState({}, "", `?id=${urlConversationId}`);
+          await markConversationRead(urlConversationId);
           return;
         }
 
         if (isMobileView) {
           window.history.pushState({}, "", "/");
-          setActiveConversation(null);
+          setActiveConversationId(null);
           return;
         }
 
         if (loadedConversations.length > 0) {
-          selectConversation(loadedConversations[0].id);
+          const defaultConversationId = loadedConversations[0].id;
+          setActiveConversationId(defaultConversationId);
+          setIsNewConversation(false);
+          window.history.pushState({}, "", `?id=${defaultConversationId}`);
+          await markConversationRead(defaultConversationId);
         }
       } catch (error) {
         console.error("Error loading chats:", error);
@@ -393,7 +375,14 @@ export default function App() {
     };
 
     void initializeChats();
-  }, [isLayoutInitialized, isMobileView, loadChats, selectConversation, toast]);
+  }, [
+    isLayoutInitialized,
+    isMobileView,
+    loadChats,
+    markConversationRead,
+    setActiveConversationId,
+    toast,
+  ]);
 
   useEffect(() => {
     if (activeConversation) {
@@ -456,13 +445,8 @@ export default function App() {
             body: JSON.stringify(payload),
           }
         );
-        const newConversation = toUiConversation({
-          chat,
-          messages: [message],
-        });
-
-        setConversations((prev) => [newConversation, ...prev]);
-        setActiveConversation(chat.id);
+        applyCreatedMessage(chat, message);
+        setActiveConversationId(chat.id);
         setIsNewConversation(false);
         setRecipientInput("");
         clearMessageDraft("new");
@@ -478,27 +462,11 @@ export default function App() {
         }
       );
 
-      setConversations((prev) =>
-        prev.map((c) => {
-          if (c.id !== conversationId) return c;
-          const uiMsg = toUiMessage(response.message, response.chat);
-          return {
-            ...c,
-            messages: mergeMessages(c.messages, [uiMsg]),
-            lastMessageTime: response.chat.updated_at,
-            unreadCount: response.chat.unread_count ?? 0,
-          };
-        })
-      );
-      setActiveConversation(conversationId);
+      applyCreatedMessage(response.chat, response.message);
+      setActiveConversationId(conversationId);
       setIsNewConversation(false);
       window.history.pushState({}, "", `?id=${conversationId}`);
       clearMessageDraft(conversationId);
-      if (response.agent_run && !response.agent_run.ok) {
-        toast({
-          description: `Agent did not start: ${response.agent_run.error ?? "unknown error"}`,
-        });
-      }
     } catch (error) {
       console.error("Error sending message:", error);
       toast({ description: "Unable to send message" });
@@ -527,7 +495,7 @@ export default function App() {
         activeConversation={activeConversation}
         onNewChat={() => {
           setIsNewConversation(true);
-          setActiveConversation(null);
+          setActiveConversationId(null);
           window.history.pushState({}, "", "/");
         }}
         onSelectConversation={selectConversation}
