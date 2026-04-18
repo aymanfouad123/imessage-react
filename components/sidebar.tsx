@@ -106,20 +106,14 @@ export function Sidebar({
 
   const filteredConversations = sortedConversations.filter((conversation) => {
     if (!searchTerm) return true;
+    const normalizedSearchTerm = searchTerm.toLowerCase();
 
-    // Search in non-system messages content only
-    const hasMatchInMessages = conversation.messages
-      .filter((message) => message.sender !== "system")
-      .some((message) =>
-        message.content.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-
-    // Search in recipient names
-    const hasMatchInNames = conversation.recipients.some((recipient) =>
-      recipient.name.toLowerCase().includes(searchTerm.toLowerCase())
+    return (
+      (conversation.name ?? "").toLowerCase().includes(normalizedSearchTerm) ||
+      conversation.recipients.some((recipient) =>
+        recipient.name.toLowerCase().includes(normalizedSearchTerm)
+      )
     );
-
-    return hasMatchInMessages || hasMatchInNames;
   });
 
   // Keyboard navigation
