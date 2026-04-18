@@ -45,3 +45,6 @@ next-env.d.ts
 # python
 __pycache__/
 *.pyc
+*.egg-info/
+.venv/
+.python-version

@@ -1,8 +1,0 @@
-composio>=0.11.5
-fastapi>=0.135.3
-httpx>=0.28.1
-openai>=2.31.0
-openai-agents>=0.13.6
-pydantic>=2.12.5
-python-dotenv>=1.2.2
-uvicorn[standard]>=0.44.0
