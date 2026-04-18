@@ -9,7 +9,6 @@ from .schemas import (
     SandboxChatResponse,
     SandboxListChatsResponse,
     SandboxMessagesResponse,
-    SandboxReadChatResponse,
     SandboxSendMessageRequest,
     SandboxSendMessageResponse,
 )
@@ -129,13 +128,6 @@ async def send_message(chat_id: str, payload: SandboxSendMessageRequest):
         "POST",
         f"/api/chats/{chat_id}/messages",
         payload.model_dump(exclude_none=True),
-    )
-    return response
-
-
-async def mark_chat_read(chat_id: str):
-    response = await _request_model(
-        SandboxReadChatResponse, "POST", f"/api/chats/{chat_id}/read"
     )
     return response
 

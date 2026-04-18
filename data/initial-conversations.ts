@@ -14,32 +14,13 @@ export const initialConversations: Conversation[] = [
     recipients: [
       {
         id: "b0000001-0000-4000-8000-000000000001",
-        name: "John Doe",
+        name: "Pepper",
       },
     ],
-    lastMessageTime: getTimeAgo(3),
+    lastMessageTime: getTimeAgo(0),
     unreadCount: 0,
     pinned: true,
-    messages: [
-      {
-        id: "c0000001-0000-4000-8000-000000000001",
-        content: "Hey — are you free to chat later?",
-        sender: "John Doe",
-        timestamp: getTimeAgo(45),
-      },
-      {
-        id: "c0000002-0000-4000-8000-000000000002",
-        content: "Sure, I'll ping you this afternoon.",
-        sender: "me",
-        timestamp: getTimeAgo(40),
-      },
-      {
-        id: "c0000003-0000-4000-8000-000000000003",
-        content: "Sounds good. Talk soon!",
-        sender: "John Doe",
-        timestamp: getTimeAgo(3),
-      },
-    ],
+    messages: [],
   },
   {
     id: "a0000002-0000-4000-8000-000000000002",

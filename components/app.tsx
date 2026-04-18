@@ -20,31 +20,44 @@ import type { Conversation, Message } from "@/types";
 
 const AGENT_SERVICE_URL =
   process.env.NEXT_PUBLIC_AGENT_SERVICE_URL ?? "http://localhost:8000";
+const INITIAL_AGENT_GREETING = "hey! hows it going?";
+const INITIAL_AGENT_GREETING_DELAY_MS = 3000;
 
 type AgentStreamEventType =
   | "typing.started"
   | "message.persisted"
   | "message.delivered"
   | "message.read"
-  | "reaction.added"
-  | "reaction.removed"
   | "task.started"
   | "task.update"
   | "task.completed"
   | "run.completed"
   | "error";
 
+type AgentRunStatus =
+  | "message_sent"
+  | "task_completed"
+  | "in_progress"
+  | "failed"
+  | "skipped";
+
+type AgentRunCompletedPayload = {
+  status: AgentRunStatus;
+  message_ids: string[];
+  messages: string[];
+  tool_summary?: Record<string, unknown>;
+};
+
 type AgentStreamEvent = {
   type: AgentStreamEventType;
   run_id: string;
   chat_id?: string;
-  bubble_id?: string;
   message_id?: string;
   text?: string;
   error?: string;
   reason?: string;
   created_at: string;
-  payload?: Record<string, unknown>;
+  payload?: Record<string, unknown> | AgentRunCompletedPayload;
 };
 
 type AgentRunState = {
@@ -65,6 +78,14 @@ const mergeMessageStatus = (
   return messageStatusRank[next] >= messageStatusRank[current] ? next : current;
 };
 
+const mergeOptionalMessageStatus = (
+  current: Message["status"],
+  next: Message["status"]
+): Message["status"] => {
+  if (!next) return current;
+  return mergeMessageStatus(current, next);
+};
+
 const mergeMessages = (current: Message[], incoming: Message[]) => {
   const byId = new Map<string, Message>();
 
@@ -74,7 +95,19 @@ const mergeMessages = (current: Message[], incoming: Message[]) => {
 
   for (const message of incoming) {
     const existing = byId.get(message.id);
-    byId.set(message.id, existing ? { ...existing, ...message } : message);
+    byId.set(
+      message.id,
+      existing
+        ? {
+            ...existing,
+            ...message,
+            status:
+              existing.sender === "me" || message.sender === "me"
+                ? mergeOptionalMessageStatus(existing.status, message.status)
+                : message.status,
+          }
+        : message
+    );
   }
 
   return [...byId.values()].sort(
@@ -226,6 +259,7 @@ export default function App() {
 
   const commandMenuRef = useRef<{ setOpen: (open: boolean) => void }>(null);
   const agentRunsByChatRef = useRef<Record<string, AgentRunState>>({});
+  const initialAgentGreetingChatIdRef = useRef<string | null>(null);
   const typingConversation = agentTypingConversationId
     ? conversations.find((conversation) => conversation.id === agentTypingConversationId)
     : null;
@@ -271,6 +305,37 @@ export default function App() {
               return { ...message, status: nextStatus };
             }),
           };
+          return didChange ? nextConversation : conversation;
+        })
+      );
+    },
+    []
+  );
+
+  const markLatestUserMessageReadLocally = useCallback(
+    (conversationId: string) => {
+      setConversations((prev) =>
+        prev.map((conversation) => {
+          if (conversation.id !== conversationId) return conversation;
+
+          const latestUserMessage = [...conversation.messages]
+            .reverse()
+            .find((message) => message.sender === "me");
+          if (!latestUserMessage) return conversation;
+
+          let didChange = false;
+          const nextConversation = {
+            ...conversation,
+            messages: conversation.messages.map((message) => {
+              if (message.id !== latestUserMessage.id) return message;
+
+              const nextStatus = mergeMessageStatus(message.status, "read");
+              if (nextStatus === message.status) return message;
+              didChange = true;
+              return { ...message, status: nextStatus };
+            }),
+          };
+
           return didChange ? nextConversation : conversation;
         })
       );
@@ -338,10 +403,12 @@ export default function App() {
     async (conversationId: string, event: AgentStreamEvent) => {
       if (event.type === "typing.started") {
         setAgentTypingConversationId(conversationId);
+        markLatestUserMessageReadLocally(conversationId);
         return;
       }
 
       if (event.type === "message.persisted") {
+        clearStreamState(conversationId);
         setConversations((prev) =>
           prev.map((conversation) => {
             if (conversation.id !== conversationId) return conversation;
@@ -378,10 +445,18 @@ export default function App() {
       }
 
       if (event.type === "error") {
-        throw new Error(event.error ?? "Agent response failed");
+        console.error("Agent stream event error:", event.error);
+        toast({ description: "Agent response failed" });
+        return;
       }
     },
-    [clearStreamState, loadOneChat, markMessageStatusLocally]
+    [
+      clearStreamState,
+      loadOneChat,
+      markLatestUserMessageReadLocally,
+      markMessageStatusLocally,
+      toast,
+    ]
   );
 
   const startAgentResponse = useCallback(
@@ -510,6 +585,52 @@ export default function App() {
       setLastActiveConversation(activeConversation);
     }
   }, [activeConversation]);
+
+  useEffect(() => {
+    if (isLoadingChats) return;
+
+    const agentConversation = conversations.find(
+      (conversation) => conversation.isAgentChat
+    );
+
+    if (!agentConversation || agentConversation.messages.length > 0) return;
+    if (initialAgentGreetingChatIdRef.current) return;
+
+    initialAgentGreetingChatIdRef.current = agentConversation.id;
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const { messages } = await fetchJson<MessagesResponse>(
+          `/api/chats/${agentConversation.id}/messages`
+        );
+
+        if (messages.length > 0) return;
+
+        await fetchJson<SendMessageResponse>(
+          `/api/chats/${agentConversation.id}/messages`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              text: INITIAL_AGENT_GREETING,
+              direction: "inbound",
+              sender_handle: agentConversation.recipients[0]?.name ?? "Pepper",
+            }),
+          }
+        );
+        await loadOneChat(agentConversation.id);
+      } catch (error) {
+        initialAgentGreetingChatIdRef.current = null;
+        console.error("Error sending initial agent greeting:", error);
+      }
+    }, INITIAL_AGENT_GREETING_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (initialAgentGreetingChatIdRef.current === agentConversation.id) {
+        initialAgentGreetingChatIdRef.current = null;
+      }
+    };
+  }, [conversations, isLoadingChats, loadOneChat]);
 
   useEffect(() => {
     setSoundEnabled(soundEffects.isEnabled());

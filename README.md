@@ -12,7 +12,8 @@ pnpm dev
 ## Notes
 
 - The app is now client-only for chat behavior.
-- AI routes, evals, and AI-specific dependencies were removed.
+- The optional FastAPI agent service streams message-shaped SSE progress for staged sends.
+- Agent stream events append complete messages; they do not render token deltas or growing message text.
 - `pnpm build` passes.
 - Chat sandbox system context lives in [`docs/chat-api.md`](docs/chat-api.md).
 

@@ -4,10 +4,10 @@ from typing import Any
 from pydantic import ValidationError
 
 from .config import settings
-from .schemas import FormattedBubble, FormatterOutput
+from .schemas import FormattedMessage, FormatterOutput
 
 
-MAX_BUBBLES = 10
+MAX_MESSAGES = 10
 FALLBACK_MAX_CHARS = 1000
 FALLBACK_TEXT = "got it"
 
@@ -31,9 +31,9 @@ def _trim_to_limit(text: str) -> str:
 def clamp_delay_ms(delay_ms: int | None, text: str, index: int) -> int:
     if delay_ms is None:
         if index == 0:
-            seconds = settings.agent_first_bubble_delay_seconds
-            seconds = max(seconds, settings.agent_min_bubble_delay_seconds)
-            seconds = min(seconds, settings.agent_max_bubble_delay_seconds)
+            seconds = settings.agent_first_message_delay_seconds
+            seconds = max(seconds, settings.agent_min_message_delay_seconds)
+            seconds = min(seconds, settings.agent_max_message_delay_seconds)
             return int(seconds * 1000)
         else:
             chars_per_second = max(settings.agent_typing_chars_per_second, 1)
@@ -41,72 +41,76 @@ def clamp_delay_ms(delay_ms: int | None, text: str, index: int) -> int:
     else:
         seconds = delay_ms / 1000
 
-    seconds = max(seconds, settings.agent_min_bubble_delay_seconds)
-    seconds = min(seconds, settings.agent_max_bubble_delay_seconds)
+    seconds = max(seconds, settings.agent_min_message_delay_seconds)
+    seconds = min(seconds, settings.agent_max_message_delay_seconds)
     return int(seconds * 1000)
 
 
-def _merge_short_bubbles(
-    bubbles: list[FormattedBubble], min_chars: int
-) -> list[FormattedBubble]:
-    """Merge very short bubbles into a neighbor so setup lines do not stand alone."""
-    if min_chars <= 0 or len(bubbles) <= 1:
-        return bubbles
+def _merge_short_messages(
+    messages: list[FormattedMessage], min_chars: int
+) -> list[FormattedMessage]:
+    """Merge very short chunks into a neighbor so setup lines do not stand alone."""
+    if min_chars <= 0 or len(messages) <= 1:
+        return messages
 
-    merged: list[FormattedBubble] = []
+    merged: list[FormattedMessage] = []
     i = 0
-    while i < len(bubbles):
-        b = bubbles[i]
-        text_len = len(_compact(b.text))
-        if text_len < min_chars and i + 1 < len(bubbles):
-            nxt = bubbles[i + 1]
-            combined = _compact(f"{b.text} {nxt.text}")
+    while i < len(messages):
+        message = messages[i]
+        text_len = len(_compact(message.text))
+        if text_len < min_chars and i + 1 < len(messages):
+            next_message = messages[i + 1]
+            combined = _compact(f"{message.text} {next_message.text}")
             merged.append(
-                FormattedBubble(text=combined, send_after_ms=nxt.send_after_ms)
+                FormattedMessage(text=combined, send_after_ms=next_message.send_after_ms)
             )
             i += 2
         elif text_len < min_chars and merged:
             prev = merged.pop()
-            combined = _compact(f"{prev.text} {b.text}")
+            combined = _compact(f"{prev.text} {message.text}")
             merged.append(
-                FormattedBubble(text=combined, send_after_ms=b.send_after_ms)
+                FormattedMessage(text=combined, send_after_ms=message.send_after_ms)
             )
             i += 1
         else:
-            merged.append(b)
+            merged.append(message)
             i += 1
     return merged
 
 
-def _merge_overflow(bubbles: list[FormattedBubble]) -> list[FormattedBubble]:
+def _merge_overflow(messages: list[FormattedMessage]) -> list[FormattedMessage]:
     cleaned = [
-        FormattedBubble(text=_compact(bubble.text), send_after_ms=bubble.send_after_ms)
-        for bubble in bubbles
-        if _compact(bubble.text)
+        FormattedMessage(
+            text=_compact(message.text), send_after_ms=message.send_after_ms
+        )
+        for message in messages
+        if _compact(message.text)
     ]
     if not cleaned:
-        return [FormattedBubble(text=FALLBACK_TEXT)]
+        return [FormattedMessage(text=FALLBACK_TEXT)]
 
-    if len(cleaned) > MAX_BUBBLES:
-        head = cleaned[: MAX_BUBBLES - 1]
-        tail_text = _compact(" ".join(bubble.text for bubble in cleaned[MAX_BUBBLES - 1 :]))
-        tail_delay = cleaned[MAX_BUBBLES - 1].send_after_ms
-        cleaned = [*head, FormattedBubble(text=tail_text, send_after_ms=tail_delay)]
+    if len(cleaned) > MAX_MESSAGES:
+        head = cleaned[: MAX_MESSAGES - 1]
+        tail_text = _compact(
+            " ".join(message.text for message in cleaned[MAX_MESSAGES - 1 :])
+        )
+        tail_delay = cleaned[MAX_MESSAGES - 1].send_after_ms
+        cleaned = [*head, FormattedMessage(text=tail_text, send_after_ms=tail_delay)]
 
-    cleaned = _merge_short_bubbles(cleaned, settings.agent_min_bubble_chars)
+    cleaned = _merge_short_messages(cleaned, settings.agent_min_message_chars)
 
-    normalized: list[FormattedBubble] = []
-    for index, bubble in enumerate(cleaned):
-        text = _trim_to_limit(bubble.text)
+    normalized: list[FormattedMessage] = []
+    for index, message in enumerate(cleaned):
+        text = _trim_to_limit(message.text)
         if text:
             normalized.append(
-                FormattedBubble(
+                FormattedMessage(
                     text=text,
-                    send_after_ms=clamp_delay_ms(bubble.send_after_ms, text, index),
+                    send_after_ms=clamp_delay_ms(message.send_after_ms, text, index),
                 )
             )
 
-    return normalized or [FormattedBubble(text=FALLBACK_TEXT)]
+    return normalized or [FormattedMessage(text=FALLBACK_TEXT)]
 
 
 def _coerce_formatter_output(output: Any) -> FormatterOutput | None:
@@ -128,27 +132,27 @@ def _coerce_json_output(output: str) -> FormatterOutput | None:
     return _coerce_formatter_output(parsed_output)
 
 
-def normalize_bubbles(output: Any) -> list[FormattedBubble]:
+def normalize_messages(output: Any) -> list[FormattedMessage]:
     formatter_output = _coerce_formatter_output(output)
     if formatter_output is not None:
-        return _merge_overflow(formatter_output.bubbles)
+        return _merge_overflow(formatter_output.messages)
 
     if isinstance(output, str):
         formatter_output = _coerce_json_output(output)
         if formatter_output is not None:
-            return _merge_overflow(formatter_output.bubbles)
+            return _merge_overflow(formatter_output.messages)
 
         fallback = _trim_to_limit(output)
-        return _merge_overflow([FormattedBubble(text=fallback or FALLBACK_TEXT)])
+        return _merge_overflow([FormattedMessage(text=fallback or FALLBACK_TEXT)])
 
     if isinstance(output, list):
-        bubbles = [
+        messages = [
             item
-            if isinstance(item, FormattedBubble)
-            else FormattedBubble(text=str(item))
+            if isinstance(item, FormattedMessage)
+            else FormattedMessage(text=str(item))
             for item in output
         ]
-        return _merge_overflow(bubbles)
+        return _merge_overflow(messages)
 
     fallback = _trim_to_limit(str(output))
-    return _merge_overflow([FormattedBubble(text=fallback or FALLBACK_TEXT)])
+    return _merge_overflow([FormattedMessage(text=fallback or FALLBACK_TEXT)])

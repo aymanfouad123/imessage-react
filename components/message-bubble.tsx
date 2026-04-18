@@ -111,6 +111,7 @@ export function MessageBubble({
     primaryRecipientName && message.content === "Notifications silenced"
       ? `${primaryRecipientName} has notification silenced`
       : message.content;
+  const outgoingBubbleClassName = "bg-[#0A7CFF]";
 
   // Map of reaction types to their SVG paths for the menu
   const { theme, systemTheme } = useTheme();
@@ -427,17 +428,13 @@ export function MessageBubble({
                 ? isMe
                   ? cn(
                       "border-[17px] border-solid border-r-[22px] border-transparent text-white",
-                      isMobileView
-                        ? "bg-[#0A7CFF]"
-                        : "bg-[linear-gradient(#47B5FF,#0A7CFF)] bg-fixed",
+                      outgoingBubbleClassName,
                     )
                   : "border-[17px] border-solid border-l-[22px] border-transparent bg-gray-100 dark:bg-[#404040] text-gray-900 dark:text-gray-100"
                 : isMe
                   ? cn(
                       "mr-[5px] border-[17px] border-solid border-transparent text-white",
-                      isMobileView
-                        ? "bg-[#0A7CFF]"
-                        : "bg-[linear-gradient(#47B5FF,#0A7CFF)] bg-fixed",
+                      outgoingBubbleClassName,
                     )
                   : "ml-[5px] border-[17px] border-solid border-transparent bg-gray-100 dark:bg-[#404040] text-gray-900 dark:text-gray-100",
             )}
@@ -465,9 +462,7 @@ export function MessageBubble({
                         "flex h-[20px] min-w-[34px] items-center justify-center gap-[4px]",
                         showBubbleTail
                           ? isMe
-                            ? isMobileView
-                              ? "bg-[#0A7CFF]"
-                              : "bg-[linear-gradient(#47B5FF,#0A7CFF)] bg-fixed"
+                            ? outgoingBubbleClassName
                             : "bg-gray-100 dark:bg-[#404040]"
                           : "bg-transparent",
                       )}

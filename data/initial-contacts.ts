@@ -8,9 +8,9 @@ export interface InitialContact {
 /** Minimal placeholder contacts for demos and local development */
 export const initialContacts: InitialContact[] = [
   {
-    name: "John Doe",
+    name: "Pepper",
     title: "Contact",
-    prompt: "You are John Doe, a generic contact in this messaging demo.",
+    prompt: "You are Pepper, a generic contact in this messaging demo.",
     bio: "Placeholder profile for local development.",
   },
   {

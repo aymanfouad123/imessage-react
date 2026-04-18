@@ -66,9 +66,9 @@ const seedStore = () => {
         created_at: createdAt,
         sent_at: createdAt,
         delivered_at: createdAt,
-        read_at: isFromMe || conversation.unreadCount === 0 ? createdAt : null,
+        read_at: !isFromMe && conversation.unreadCount === 0 ? createdAt : null,
         is_delivered: true,
-        is_read: isFromMe || conversation.unreadCount === 0,
+        is_read: !isFromMe && conversation.unreadCount === 0,
       };
     });
 
@@ -117,9 +117,9 @@ export const createChat = (request: CreateChatRequest) => {
     created_at: timestamp,
     sent_at: timestamp,
     delivered_at: timestamp,
-    read_at: timestamp,
+    read_at: null,
     is_delivered: true,
-    is_read: true,
+    is_read: false,
   };
 
   chats.set(chat.id, chat);
@@ -144,17 +144,33 @@ export const sendMessage = (chatId: string, request: SendMessageRequest) => {
     created_at: timestamp,
     sent_at: timestamp,
     delivered_at: isFromMe ? timestamp : null,
-    read_at: isFromMe ? timestamp : null,
+    read_at: null,
     is_delivered: true,
-    is_read: isFromMe,
+    is_read: false,
   };
+  const existingMessages = getMessages(chatId);
+  const nextMessages =
+    isFromMe || !chat.is_agent_chat
+      ? [...existingMessages, message]
+      : [
+          ...existingMessages.map((existingMessage) =>
+            existingMessage.is_from_me
+              ? {
+                  ...existingMessage,
+                  read_at: existingMessage.read_at ?? timestamp,
+                  is_read: true,
+                }
+              : existingMessage
+          ),
+          message,
+        ];
   const updatedChat = {
     ...chat,
     updated_at: timestamp,
     unread_count: isFromMe ? 0 : (chat.unread_count ?? 0) + 1,
   };
 
-  messagesByChat.set(chatId, [...getMessages(chatId), message]);
+  messagesByChat.set(chatId, nextMessages);
   chats.set(chatId, updatedChat);
 
   return { chat: updatedChat, message };
