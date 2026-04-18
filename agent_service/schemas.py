@@ -1,92 +1,21 @@
-from typing import Any, Literal
+from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
 
 
-MessageDirection = Literal["inbound", "outbound"]
 MemorySenderType = Literal["user", "agent"]
-AgentRunStatus = Literal[
-    "message_sent",
-    "task_completed",
-    "in_progress",
-    "failed",
-    "skipped",
-]
-AgentStreamEventType = Literal[
-    "typing.started",
-    "message.persisted",
-    "message.delivered",
-    "message.read",
-    "task.started",
-    "task.update",
-    "task.completed",
-    "run.completed",
-    "error",
-]
 
 
 class HealthResponse(BaseModel):
     status: str
 
 
-class AgentRespondRequest(BaseModel):
-    chat_id: str | None = None
-
-
-class AgentRespondResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    chat_id: str
-    status: AgentRunStatus = "message_sent"
-    messages: list[str]
-    message_ids: list[str]
-    reason: str | None = None
-
-
-class AgentStreamEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: AgentStreamEventType
-    run_id: str
-    chat_id: str | None = None
-    message_id: str | None = None
-    text: str | None = None
-    task_id: str | None = None
-    task_label: str | None = None
-    error: str | None = None
-    reason: str | None = None
-    payload: dict[str, Any] | None = None
-    created_at: str
-
-
 class ReasonerOutput(BaseModel):
     should_reply: bool = True
     draft_response: str = ""
     reason: str | None = None
-    needs_tool: bool = False
-    tool_intent: str | None = None
-
-
-class ToolRunSummary(BaseModel):
-    tool_call_count: int = 0
-    tool_output_count: int = 0
-    real_tool_action_completed: bool = False
-    auth_requested: bool = False
-    failed: bool = False
-
-
-class ReasonerRunResult(BaseModel):
-    output: ReasonerOutput
-    tool_summary: ToolRunSummary = Field(default_factory=ToolRunSummary)
-
-
-class FormattedMessage(BaseModel):
-    text: str = Field(min_length=1)
-    send_after_ms: int | None = None
-
-
-class FormatterOutput(BaseModel):
-    messages: list[FormattedMessage] = Field(min_length=1, max_length=10)
 
 
 class MemoryMessage(BaseModel):
@@ -103,25 +32,6 @@ class ConversationMemory(BaseModel):
     latest_agent_message: MemoryMessage | None = None
 
 
-class SandboxChatHandle(BaseModel):
-    id: str
-    handle: str
-    service: str
-    is_me: bool
-
-
-class SandboxChat(BaseModel):
-    id: str
-    display_name: str
-    handles: list[SandboxChatHandle]
-    service: str
-    is_group: bool
-    created_at: str
-    updated_at: str
-    unread_count: int | None = None
-    is_agent_chat: bool | None = None
-
-
 class SandboxMessage(BaseModel):
     id: str
     chat_id: str
@@ -136,30 +46,20 @@ class SandboxMessage(BaseModel):
     is_read: bool
 
 
-class SandboxSendMessageRequest(BaseModel):
-    text: str = Field(min_length=1)
-    direction: MessageDirection = "outbound"
-    sender_handle: str | None = None
+class AgentRunTrigger(BaseModel):
+    reason: Literal["user_message"] = "user_message"
+    message_id: str
 
 
-class SandboxListChatsResponse(BaseModel):
-    chats: list[SandboxChat]
+class AgentRunContext(BaseModel):
+    recent_messages: list[SandboxMessage]
+    agent_handle: str
 
 
-class SandboxChatResponse(BaseModel):
-    chat: SandboxChat
+class AgentRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-
-class SandboxMessagesResponse(BaseModel):
-    messages: list[SandboxMessage]
-
-
-class SandboxSendMessageResponse(BaseModel):
-    chat: SandboxChat
-    message: SandboxMessage
-
-
-class SandboxErrorResponse(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    error: str | None = None
+    run_id: str
+    chat_id: str
+    trigger: AgentRunTrigger
+    context: AgentRunContext
