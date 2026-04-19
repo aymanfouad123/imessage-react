@@ -27,7 +27,6 @@ export function attachWebSocketHub(server: Server): WebSocketServer {
       const host = request.headers.host ?? "localhost";
       const url = new URL(request.url ?? "/", `http://${host}`);
       if (url.pathname !== "/ws") {
-        socket.destroy();
         return;
       }
     } catch {
