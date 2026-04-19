@@ -21,6 +21,14 @@ def _get_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _get_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    return raw_value.lower() in {"1", "true", "yes", "on"}
+
+
 def _get_float(name: str, default: float) -> float:
     raw_value = os.getenv(name)
     if raw_value is None:
@@ -48,7 +56,16 @@ class Settings:
     agent_reasoner_timeout_seconds: float = _get_float(
         "AGENT_REASONER_TIMEOUT_SECONDS", 90.0
     )
+    agent_read_delay_seconds: float = _get_float(
+        "AGENT_READ_DELAY_SECONDS", 1.25
+    )
     memory_window_size: int = _get_int("MEMORY_WINDOW_SIZE", 20)
+    composio_enabled: bool = _get_bool("COMPOSIO_ENABLED", True)
+    composio_user_id: str = os.getenv("COMPOSIO_USER_ID", "user_xgge7l")
+    composio_required_toolkits: str = os.getenv(
+        "COMPOSIO_REQUIRED_TOOLKITS", "googlecalendar"
+    )
+    composio_manage_connections: bool = _get_bool("COMPOSIO_MANAGE_CONNECTIONS", True)
 
 
 settings = Settings()
